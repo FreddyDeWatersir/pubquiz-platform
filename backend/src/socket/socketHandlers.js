@@ -1,0 +1,149 @@
+const { dbHelpers } = require('../database');
+
+function setupSocketHandlers(io) {
+  io.on('connection', (socket) => {
+    console.log('New client connected:', socket.id);
+
+    // Team joins with their session token
+    socket.on('team:join', async (data) => {
+      const { sessionToken } = data;
+      
+      try {
+        const team = await dbHelpers.get(
+          'SELECT * FROM teams WHERE session_token = ?',
+          [sessionToken]
+        );
+
+        if (team) {
+          socket.join(`quiz-${team.quiz_id}`);
+          socket.teamId = team.id;
+          socket.quizId = team.quiz_id;
+          
+          console.log(`Team ${team.team_name} joined quiz ${team.quiz_id}`);
+          
+          socket.emit('team:joined', {
+            teamId: team.id,
+            teamName: team.team_name,
+            quizId: team.quiz_id
+          });
+
+          // Check if there's already an active round
+          const currentRound = await dbHelpers.get(
+            'SELECT * FROM rounds WHERE quiz_id = ? AND is_active = 1',
+            [team.quiz_id]
+          );
+
+          if (currentRound) {
+            const questions = await dbHelpers.all(
+              'SELECT id, question_text, option_a, option_b, option_c, option_d FROM questions WHERE round_id = ?',
+              [currentRound.id]
+            );
+
+            socket.emit('round:started', {
+              roundNumber: currentRound.round_number,
+              questions
+            });
+          }
+        } else {
+          socket.emit('error', { message: 'Invalid session token' });
+        }
+      } catch (error) {
+        console.error('Error in team:join:', error);
+        socket.emit('error', { message: 'Failed to join quiz' });
+      }
+    });
+
+    // Organizer joins
+    socket.on('organizer:join', async (data) => {
+      const { quizId } = data;
+      socket.join(`organizer-${quizId}`);
+      socket.quizId = quizId;
+      console.log(`Organizer joined quiz ${quizId}`);
+      
+      socket.emit('organizer:joined', { quizId });
+    });
+
+    // Team submits answers
+    socket.on('team:submit', async (data) => {
+      const { answers } = data; // Array of { questionId, selectedAnswer }
+      
+      try {
+        // Save answers to database
+        for (const answer of answers) {
+          const question = await dbHelpers.get(
+            'SELECT correct_answer FROM questions WHERE id = ?',
+            [answer.questionId]
+          );
+
+          const isCorrect = question.correct_answer === answer.selectedAnswer ? 1 : 0;
+
+          await dbHelpers.run(
+            `INSERT OR REPLACE INTO answers (team_id, question_id, selected_answer, is_correct)
+             VALUES (?, ?, ?, ?)`,
+            [socket.teamId, answer.questionId, answer.selectedAnswer, isCorrect]
+          );
+        }
+
+        socket.emit('team:submitted', { success: true });
+        
+        // Notify organizer
+        const team = await dbHelpers.get('SELECT team_name FROM teams WHERE id = ?', [socket.teamId]);
+        io.to(`organizer-${socket.quizId}`).emit('team:answered', {
+          teamId: socket.teamId,
+          teamName: team.team_name
+        });
+
+      } catch (error) {
+        console.error('Error submitting answers:', error);
+        socket.emit('error', { message: 'Failed to submit answers' });
+      }
+    });
+
+    // Organizer activates a round
+    socket.on('organizer:activateRound', async (data) => {
+      const { roundId } = data;
+      
+      try {
+        // Get round info
+        const round = await dbHelpers.get('SELECT quiz_id, round_number FROM rounds WHERE id = ?', [roundId]);
+        
+        // Deactivate all rounds for this quiz first
+        await dbHelpers.run(
+          'UPDATE rounds SET is_active = 0 WHERE quiz_id = ?',
+          [round.quiz_id]
+        );
+
+        // Activate the selected round
+        await dbHelpers.run(
+          'UPDATE rounds SET is_active = 1 WHERE id = ?',
+          [roundId]
+        );
+
+        // Get questions for this round (WITHOUT correct answers)
+        const questions = await dbHelpers.all(
+          'SELECT id, question_text, option_a, option_b, option_c, option_d FROM questions WHERE round_id = ?',
+          [roundId]
+        );
+
+        // Broadcast to all teams in this quiz
+        io.to(`quiz-${round.quiz_id}`).emit('round:started', {
+          roundNumber: round.round_number,
+          questions
+        });
+
+        socket.emit('organizer:roundActivated', { success: true, roundId });
+        
+        console.log(`Round ${roundId} activated for quiz ${round.quiz_id}`);
+      } catch (error) {
+        console.error('Error activating round:', error);
+        socket.emit('error', { message: 'Failed to activate round' });
+      }
+    });
+
+    socket.on('disconnect', () => {
+      console.log('Client disconnected:', socket.id);
+    });
+  });
+}
+
+module.exports = { setupSocketHandlers };
