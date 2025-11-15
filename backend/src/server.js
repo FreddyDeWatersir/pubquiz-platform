@@ -30,6 +30,40 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'PubQuiz server is running' });
 });
 
+// Initialize database with quiz questions (one-time use)
+app.post('/api/init-quiz', async (req, res) => {
+  try {
+    // Import the init function
+    const { dbHelpers } = require('./database');
+    
+    // Check if quiz already exists
+    const existing = await dbHelpers.get('SELECT * FROM quizzes WHERE id = 1');
+    if (existing) {
+      return res.json({ message: 'Quiz already initialized', quizId: existing.id });
+    }
+    
+    // Run the initialization (simplified version)
+    const { exec } = require('child_process');
+    const path = require('path');
+    
+    exec('node src/initDatabase.js', { cwd: path.join(__dirname, '..') }, (error, stdout, stderr) => {
+      if (error) {
+        console.error('Init error:', error);
+        return res.status(500).json({ error: error.message, stderr });
+      }
+      console.log('Init output:', stdout);
+      res.json({ 
+        message: 'Database initialized successfully', 
+        output: stdout 
+      });
+    });
+    
+  } catch (error) {
+    console.error('Error in init-quiz:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Test endpoint to get active quiz
 app.get('/api/quiz/active', async (req, res) => {
   try {
