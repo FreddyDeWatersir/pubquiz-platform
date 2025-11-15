@@ -31,7 +31,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Initialize database with quiz questions (one-time use)
-app.post('/api/init-quiz', async (req, res) => {
+app.get('/api/init-quiz', async (req, res) => {
   try {
     // Import the init function
     const { dbHelpers } = require('./database');
