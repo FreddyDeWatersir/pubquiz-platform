@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_URL } from '../config';
 import io from 'socket.io-client';
 
 function OrganizerDashboard() {
@@ -12,7 +13,7 @@ function OrganizerDashboard() {
   // Connect to WebSocket and fetch data when component loads
   useEffect(() => {
     // Connect to WebSocket
-    const newSocket = io('http://localhost:3000');
+    const newSocket = io(API_URL);
     setSocket(newSocket);
 
     // Join as organizer
@@ -50,7 +51,7 @@ function OrganizerDashboard() {
 
   const fetchTeams = async () => {
     try {
-      const response = await fetch(`http://localhost:3000/api/organizer/quiz/${quizId}/teams`);
+      const response = await fetch(`${API_URL}/api/organizer/quiz/${quizId}/teams`);
       const data = await response.json();
       setTeams(data);
     } catch (error) {
@@ -60,7 +61,7 @@ function OrganizerDashboard() {
 
   const fetchRounds = async () => {
     try {
-      const response = await fetch(`http://localhost:3000/api/organizer/quiz/${quizId}/rounds`);
+      const response = await fetch(`${API_URL}/api/organizer/quiz/${quizId}/rounds`);
       const data = await response.json();
       setRounds(data);
       setLoading(false);
@@ -72,7 +73,7 @@ function OrganizerDashboard() {
 
   const fetchLeaderboard = async () => {
   try {
-    const response = await fetch(`http://localhost:3000/api/organizer/quiz/${quizId}/leaderboard`);
+    const response = await fetch(`${API_URL}/api/organizer/quiz/${quizId}/leaderboard`);
     const data = await response.json();
     setLeaderboard(data);
    } catch (error) {
@@ -101,7 +102,7 @@ function OrganizerDashboard() {
   if (!confirmed) return;
   
   try {
-    const response = await fetch(`http://localhost:3000/api/organizer/quiz/${quizId}/reset`, {
+    const response = await fetch(`${API_URL}/api/organizer/quiz/${quizId}/reset`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

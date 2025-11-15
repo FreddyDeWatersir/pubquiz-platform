@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_URL } from '../config';
 
 function TeamJoin({ onJoinSuccess }) {
   const [teamName, setTeamName] = useState('');
@@ -16,7 +17,7 @@ function TeamJoin({ onJoinSuccess }) {
 
     try {
       // Call backend to register team
-      const response = await fetch('http://localhost:3000/api/teams/register', {
+      const response = await fetch(`${API_URL}/api/teams/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

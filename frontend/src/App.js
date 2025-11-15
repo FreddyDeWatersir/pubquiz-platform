@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_URL } from './config';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import TeamJoin from './components/TeamJoin';
 import OrganizerDashboard from './components/OrganizerDashboard';
@@ -33,7 +34,7 @@ function TeamPage() {
     console.log('Team joined successfully!', { token, name });
     
     // Connect to WebSocket
-    const newSocket = io('http://localhost:3000');
+    const newSocket = io(API_URL);
     setSocket(newSocket);
 
     // Join the quiz room with session token
