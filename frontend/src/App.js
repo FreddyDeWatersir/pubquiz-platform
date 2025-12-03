@@ -6,6 +6,8 @@ import OrganizerDashboard from './components/OrganizerDashboard';
 import QuestionDisplay from './components/QuestionDisplay';
 import io from 'socket.io-client';
 import './App.css';
+import AdminLogin from './components/AdminLogin';
+import QuestionManager from './components/QuestionManager';
 
 function App() {
   return (
@@ -16,6 +18,8 @@ function App() {
         
         {/* Organizer page */}
         <Route path="/organizer" element={<OrganizerDashboard />} />
+        <Route path="/admin" element={<AdminLogin />} />
+        <Route path="/admin/questions" element={<QuestionManager />} />
       </Routes>
     </Router>
   );

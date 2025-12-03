@@ -5,6 +5,7 @@ const cors = require('cors');
 const { dbHelpers } = require('./database');
 const teamRoutes = require('./routes/teamRoutes'); 
 const organizerRoutes = require('./routes/organizerRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 const { setupSocketHandlers } = require('./socket/socketHandlers');
 
 const app = express();
@@ -24,7 +25,7 @@ app.use(cors({
 app.use(express.json());
 app.use('/api/teams', teamRoutes);
 app.use('/api/organizer', organizerRoutes);
-
+app.use('/api/admin', adminRoutes);
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'PubQuiz server is running' });
