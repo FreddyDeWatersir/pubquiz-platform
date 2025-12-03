@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 
 // Simple password check (stored in code for now)
 // Later you can move this to backend authentication
-const ADMIN_PASSWORD = 'pubquiz2025'; // Change this to your password!
+const ADMIN_PASSWORD = 'shoutoutWarnars'; // Change this to your password!
 
 function AdminLogin() {
   const [password, setPassword] = useState('');
