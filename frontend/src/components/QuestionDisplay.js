@@ -2,31 +2,45 @@ import React, { useState } from 'react';
 
 function QuestionDisplay({ questions, onSubmit, teamName }) {
   const [answers, setAnswers] = useState({});
+  const [textAnswers, setTextAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
   const handleAnswerChange = (questionId, answer) => {
-    setAnswers({
-      ...answers,
-      [questionId]: answer
-    });
+    setAnswers({ ...answers, [questionId]: answer });
+  };
+
+  const handleTextChange = (questionId, text) => {
+    setTextAnswers({ ...textAnswers, [questionId]: text });
   };
 
   const handleSubmit = () => {
-    // Check if all questions are answered
-    const allAnswered = questions.every(q => answers[q.id]);
-    
+    // Check all questions are answered
+    const allAnswered = questions.every(q => {
+      if (q.question_type === 'open') {
+        return textAnswers[q.id] && textAnswers[q.id].trim();
+      }
+      return answers[q.id];
+    });
+
     if (!allAnswered) {
       alert('Please answer all questions before submitting!');
       return;
     }
 
     setSubmitting(true);
-    
-    // Convert answers object to array format
-    const answersArray = Object.keys(answers).map(questionId => ({
-      questionId: parseInt(questionId),
-      selectedAnswer: answers[questionId]
-    }));
+
+    const answersArray = questions.map(q => {
+      if (q.question_type === 'open') {
+        return {
+          questionId: q.id,
+          answerText: textAnswers[q.id]
+        };
+      }
+      return {
+        questionId: q.id,
+        selectedAnswer: answers[q.id]
+      };
+    });
 
     onSubmit(answersArray);
   };
@@ -42,36 +56,72 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
         {questions.map((question, index) => (
           <div key={question.id} style={styles.questionCard}>
             <h3 style={styles.questionNumber}>Question {index + 1}</h3>
+
+            {/* Question image */}
+            {question.image_url && (
+              <div style={styles.imageContainer}>
+                <img
+                  src={question.image_url}
+                  alt={`Question ${index + 1}`}
+                  style={styles.questionImage}
+                  onError={(e) => { e.target.style.display = 'none'; }}
+                />
+              </div>
+            )}
+
             <p style={styles.questionText}>{question.question_text}</p>
-            
-            <div style={styles.optionsContainer}>
-              {['A', 'B', 'C', 'D'].map((option) => {
-                const optionText = question[`option_${option.toLowerCase()}`];
-                return (
-                  <label key={option} style={styles.optionLabel}>
-                    <input
-                      type="radio"
-                      name={`question-${question.id}`}
-                      value={option}
-                      checked={answers[question.id] === option}
-                      onChange={() => handleAnswerChange(question.id, option)}
-                      style={styles.radio}
-                      disabled={submitting}
-                    />
-                    <span style={styles.optionText}>
-                      <strong>{option}:</strong> {optionText}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
+
+            {/* Open question */}
+            {question.question_type === 'open' ? (
+              <div style={styles.openAnswerContainer}>
+                <textarea
+                  placeholder="Type your answer here..."
+                  value={textAnswers[question.id] || ''}
+                  onChange={(e) => handleTextChange(question.id, e.target.value)}
+                  style={styles.openInput}
+                  rows="3"
+                  disabled={submitting}
+                />
+              </div>
+            ) : (
+              /* Multiple choice */
+              <div style={styles.optionsContainer}>
+                {['A', 'B', 'C', 'D'].map((option) => {
+                  const optionText = question[`option_${option.toLowerCase()}`];
+                  if (!optionText) return null;
+                  const isSelected = answers[question.id] === option;
+                  return (
+                    <label
+                      key={option}
+                      style={{
+                        ...styles.optionLabel,
+                        ...(isSelected ? styles.optionSelected : {})
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name={`question-${question.id}`}
+                        value={option}
+                        checked={isSelected}
+                        onChange={() => handleAnswerChange(question.id, option)}
+                        style={styles.radio}
+                        disabled={submitting}
+                      />
+                      <span style={styles.optionText}>
+                        <strong>{option}:</strong> {optionText}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
           </div>
         ))}
       </div>
 
       <div style={styles.submitContainer}>
-        <button 
-          onClick={handleSubmit} 
+        <button
+          onClick={handleSubmit}
           style={styles.submitButton}
           disabled={submitting}
         >
@@ -116,6 +166,16 @@ const styles = {
     color: '#0f3460',
     marginBottom: '10px',
   },
+  imageContainer: {
+    marginBottom: '15px',
+    textAlign: 'center',
+  },
+  questionImage: {
+    maxWidth: '100%',
+    maxHeight: '350px',
+    borderRadius: '8px',
+    objectFit: 'contain',
+  },
   questionText: {
     fontSize: '20px',
     marginBottom: '20px',
@@ -134,6 +194,11 @@ const styles = {
     borderRadius: '5px',
     cursor: 'pointer',
     transition: 'background-color 0.2s',
+    border: '2px solid transparent',
+  },
+  optionSelected: {
+    backgroundColor: '#1a5276',
+    borderColor: '#2ecc71',
   },
   radio: {
     marginRight: '12px',
@@ -143,6 +208,19 @@ const styles = {
   },
   optionText: {
     fontSize: '16px',
+  },
+  openAnswerContainer: {
+    marginTop: '10px',
+  },
+  openInput: {
+    width: '100%',
+    padding: '14px',
+    fontSize: '16px',
+    border: 'none',
+    borderRadius: '5px',
+    boxSizing: 'border-box',
+    resize: 'vertical',
+    fontFamily: 'inherit',
   },
   submitContainer: {
     maxWidth: '800px',

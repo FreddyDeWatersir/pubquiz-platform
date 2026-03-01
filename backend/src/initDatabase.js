@@ -6,8 +6,8 @@ async function initializeQuizData() {
 
     // Create a quiz
     const quizResult = await dbHelpers.run(
-      'INSERT INTO quizzes (name, is_active) VALUES (?, 1)',
-      ['General Knowledge Quiz']
+      'INSERT INTO quizzes (name, access_code, status, is_active) VALUES (?, ?, ?, 1)',
+      ['General Knowledge Quiz', 'QUIZ1', 'active']
     );
     const quizId = quizResult.id;
     console.log(`Created quiz with ID: ${quizId}`);
