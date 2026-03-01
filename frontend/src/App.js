@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { API_URL } from './config';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import TeamJoin from './components/TeamJoin';
 import OrganizerDashboard from './components/OrganizerDashboard';
 import QuestionDisplay from './components/QuestionDisplay';

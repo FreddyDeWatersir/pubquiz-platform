@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_URL } from '../config';
 
@@ -20,57 +20,53 @@ function QuestionManager() {
     }
   }, [navigate]);
 
-  useEffect(() => {
-    fetchQuizzes();
-  }, []);
-
-  useEffect(() => {
-    if (selectedQuizId) {
-      fetchQuestions();
-      fetchRounds();
-    }
-  }, [selectedQuizId]);
-
-  const fetchQuizzes = async () => {
+  const fetchQuizzes = useCallback(async () => {
     try {
       const response = await fetch(`${API_URL}/api/organizer/quizzes`);
       const data = await response.json();
       setQuizzes(data);
-      if (data.length > 0 && !selectedQuizId) {
-        setSelectedQuizId(data[0].id);
+      if (data.length > 0) {
+        setSelectedQuizId(prev => prev || data[0].id);
       }
       setLoading(false);
     } catch (error) {
       console.error('Error fetching quizzes:', error);
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchQuestions = async () => {
+  const fetchQuestions = useCallback(async () => {
+    if (!selectedQuizId) return;
     try {
-      const url = selectedQuizId 
-        ? `${API_URL}/api/admin/questions?quiz_id=${selectedQuizId}`
-        : `${API_URL}/api/admin/questions`;
-      const response = await fetch(url);
+      const response = await fetch(`${API_URL}/api/admin/questions?quiz_id=${selectedQuizId}`);
       const data = await response.json();
       setQuestions(data);
     } catch (error) {
       console.error('Error fetching questions:', error);
     }
-  };
+  }, [selectedQuizId]);
 
-  const fetchRounds = async () => {
+  const fetchRounds = useCallback(async () => {
+    if (!selectedQuizId) return;
     try {
-      const url = selectedQuizId
-        ? `${API_URL}/api/admin/rounds?quiz_id=${selectedQuizId}`
-        : `${API_URL}/api/admin/rounds`;
-      const response = await fetch(url);
+      const response = await fetch(`${API_URL}/api/admin/rounds?quiz_id=${selectedQuizId}`);
       const data = await response.json();
       setRounds(data);
     } catch (error) {
       console.error('Error fetching rounds:', error);
     }
-  };
+  }, [selectedQuizId]);
+
+  useEffect(() => {
+    fetchQuizzes();
+  }, [fetchQuizzes]);
+
+  useEffect(() => {
+    if (selectedQuizId) {
+      fetchQuestions();
+      fetchRounds();
+    }
+  }, [selectedQuizId, fetchQuestions, fetchRounds]);
 
   const handleDelete = async (questionId) => {
     if (!window.confirm('Are you sure you want to delete this question?')) return;
