@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { API_URL } from '../config';
 import io from 'socket.io-client';
+import { colors, commonStyles, shadows } from '../theme';
 
 function OrganizerDashboard() {
   const [quizzes, setQuizzes] = useState([]);
@@ -10,6 +11,7 @@ function OrganizerDashboard() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [loading, setLoading] = useState(true);
   const [socket, setSocket] = useState(null);
+  const [toast, setToast] = useState(null);
 
   // Answer grading
   const [gradingRoundId, setGradingRoundId] = useState(null);
@@ -20,6 +22,11 @@ function OrganizerDashboard() {
   const [newQuizName, setNewQuizName] = useState('');
   const [newQuizCode, setNewQuizCode] = useState('');
 
+  const showToast = (message, duration = 3000) => {
+    setToast(message);
+    setTimeout(() => setToast(null), duration);
+  };
+
   // Fetch quizzes on mount
   useEffect(() => {
     fetchQuizzes();
@@ -29,7 +36,6 @@ function OrganizerDashboard() {
   useEffect(() => {
     if (!selectedQuizId) return;
 
-    // Connect to WebSocket
     const newSocket = io(API_URL);
     setSocket(newSocket);
 
@@ -45,8 +51,7 @@ function OrganizerDashboard() {
     });
 
     newSocket.on('organizer:roundActivated', (data) => {
-      console.log('Round activated:', data);
-      alert('Round activated! All teams received questions.');
+      showToast('Round activated! All teams received questions.');
       fetchRounds(selectedQuizId);
     });
 
@@ -103,43 +108,36 @@ function OrganizerDashboard() {
 
   const createQuiz = async () => {
     if (!newQuizName.trim() || !newQuizCode.trim()) {
-      alert('Please enter both a quiz name and access code');
+      showToast('Please enter both a quiz name and access code');
       return;
     }
-
     try {
       const response = await fetch(`${API_URL}/api/organizer/quizzes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newQuizName, access_code: newQuizCode })
       });
-
       const data = await response.json();
-
       if (response.ok) {
         setNewQuizName('');
         setNewQuizCode('');
         setShowCreateQuiz(false);
         fetchQuizzes();
-        // Auto-select the new quiz
         setSelectedQuizId(data.quiz.id);
       } else {
-        alert(data.error || 'Failed to create quiz');
+        showToast(data.error || 'Failed to create quiz');
       }
     } catch (error) {
-      console.error('Error creating quiz:', error);
-      alert('Failed to create quiz');
+      showToast('Failed to create quiz');
     }
   };
 
   const deleteQuiz = async (quizId, quizName) => {
     if (!window.confirm(`Delete "${quizName}" and all its data? This cannot be undone.`)) return;
-
     try {
       const response = await fetch(`${API_URL}/api/organizer/quizzes/${quizId}`, {
         method: 'DELETE'
       });
-
       if (response.ok) {
         if (selectedQuizId === quizId) {
           setSelectedQuizId(null);
@@ -148,8 +146,6 @@ function OrganizerDashboard() {
           setLeaderboard([]);
         }
         fetchQuizzes();
-      } else {
-        alert('Failed to delete quiz');
       }
     } catch (error) {
       console.error('Error deleting quiz:', error);
@@ -163,12 +159,7 @@ function OrganizerDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       });
-
-      if (response.ok) {
-        fetchRounds(selectedQuizId);
-      } else {
-        alert('Failed to add round');
-      }
+      if (response.ok) fetchRounds(selectedQuizId);
     } catch (error) {
       console.error('Error adding round:', error);
     }
@@ -176,15 +167,11 @@ function OrganizerDashboard() {
 
   const deleteRound = async (roundId) => {
     if (!window.confirm('Delete this round and all its questions?')) return;
-
     try {
       const response = await fetch(`${API_URL}/api/organizer/rounds/${roundId}`, {
         method: 'DELETE'
       });
-
-      if (response.ok) {
-        fetchRounds(selectedQuizId);
-      }
+      if (response.ok) fetchRounds(selectedQuizId);
     } catch (error) {
       console.error('Error deleting round:', error);
     }
@@ -192,7 +179,7 @@ function OrganizerDashboard() {
 
   const activateRound = async (roundId) => {
     if (!socket) {
-      alert('WebSocket not connected!');
+      showToast('WebSocket not connected!');
       return;
     }
     socket.emit('organizer:activateRound', { roundId });
@@ -200,22 +187,18 @@ function OrganizerDashboard() {
 
   const resetQuiz = async () => {
     if (!window.confirm('⚠️ This will DELETE all teams, answers, and reset rounds. Are you sure?')) return;
-
     try {
       const response = await fetch(`${API_URL}/api/organizer/quiz/${selectedQuizId}/reset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
-
       if (response.ok) {
-        alert('Quiz reset successfully!');
+        showToast('Quiz reset successfully!');
         fetchTeams(selectedQuizId);
         fetchRounds(selectedQuizId);
         fetchLeaderboard(selectedQuizId);
         setRoundAnswers([]);
         setGradingRoundId(null);
-      } else {
-        alert('Failed to reset quiz');
       }
     } catch (error) {
       console.error('Error resetting quiz:', error);
@@ -242,8 +225,6 @@ function OrganizerDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_correct: isCorrect })
       });
-
-      // Update local state
       setRoundAnswers(prev =>
         prev.map(a => a.answer_id === answerId ? { ...a, is_correct: isCorrect ? 1 : 0 } : a)
       );
@@ -253,82 +234,175 @@ function OrganizerDashboard() {
     }
   };
 
+  // ──────────────────────────────────────────────────────────
+  // SPREADSHEET EXPORT
+  // ──────────────────────────────────────────────────────────
+  //
+  // LEARNING POINT: This generates a CSV file entirely on the client.
+  // No backend needed. We take the roundAnswers data (which is already
+  // in memory) and convert it to a CSV string, then trigger a download.
+  //
+  // The trick: we create a Blob (binary data), make a temporary URL for it,
+  // create an invisible <a> link, click it programmatically, then clean up.
+  // This is the standard pattern for client-side file downloads in JS.
+  //
+  const exportToSpreadsheet = () => {
+    if (roundAnswers.length === 0) {
+      showToast('No answers to export');
+      return;
+    }
+
+    // Build CSV rows
+    const headers = ['Question', 'Type', 'Correct Answer', 'Team', 'Team Answer', 'Result'];
+    const rows = roundAnswers.map(a => {
+      const teamAnswer = a.question_type === 'open'
+        ? (a.answer_text || '—')
+        : (a.selected_answer || '—');
+      const result = a.is_correct === 1 ? 'Correct'
+        : a.is_correct === 0 ? 'Wrong'
+        : 'Pending';
+
+      // CSV escaping: wrap in quotes if the value contains commas or quotes
+      return [
+        a.question_text,
+        a.question_type,
+        a.correct_answer,
+        a.team_name,
+        teamAnswer,
+        result,
+      ].map(val => `"${String(val).replace(/"/g, '""')}"`).join(',');
+    });
+
+    const csv = [headers.join(','), ...rows].join('\n');
+
+    // Trigger download
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+
+    const roundNum = rounds.find(r => r.id === gradingRoundId)?.round_number || 'unknown';
+    const quizName = quizzes.find(q => q.id === selectedQuizId)?.name || 'quiz';
+    link.download = `${quizName}_round${roundNum}_answers.csv`;
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast('Spreadsheet downloaded! ✓');
+  };
+
+  // Also export the full leaderboard
+  const exportLeaderboard = () => {
+    if (leaderboard.length === 0) {
+      showToast('No leaderboard data to export');
+      return;
+    }
+
+    const headers = ['Rank', 'Team Name', 'Score', 'Total Answered'];
+    const rows = leaderboard.map((team, index) => {
+      return [index + 1, team.team_name, team.score, team.total_answered]
+        .map(val => `"${String(val).replace(/"/g, '""')}"`).join(',');
+    });
+
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+
+    const quizName = quizzes.find(q => q.id === selectedQuizId)?.name || 'quiz';
+    link.download = `${quizName}_leaderboard.csv`;
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast('Leaderboard exported! ✓');
+  };
+
   if (loading) {
     return (
-      <div style={styles.container}>
-        <p style={styles.loadingText}>Loading...</p>
+      <div style={s.container}>
+        <p style={{ textAlign: 'center', fontSize: '18px', marginTop: '50px', color: colors.textMuted }}>
+          Loading...
+        </p>
       </div>
     );
   }
 
   // ==========================================
-  // QUIZ SELECTOR VIEW (no quiz selected)
+  // QUIZ SELECTOR VIEW
   // ==========================================
   if (!selectedQuizId) {
     return (
-      <div style={styles.container}>
-        <div style={styles.header}>
-          <h1 style={styles.title}>🎮 Organizer Dashboard</h1>
+      <div style={s.container}>
+        <div style={s.header}>
+          <h1 style={s.title}>⚡ Organizer Dashboard</h1>
         </div>
 
-        <div style={styles.content}>
-          <div style={styles.section}>
-            <div style={styles.sectionHeader}>
-              <h2 style={styles.sectionTitle}>📋 Your Quizzes</h2>
-              <button onClick={() => setShowCreateQuiz(!showCreateQuiz)} style={styles.addRoundButton}>
-                ➕ New Quiz
+        <div style={s.content}>
+          <div style={s.section}>
+            <div style={s.sectionHeader}>
+              <h2 style={s.sectionTitle}>Your Quizzes</h2>
+              <button onClick={() => setShowCreateQuiz(!showCreateQuiz)} style={s.addBtn}>
+                + New Quiz
               </button>
             </div>
 
             {showCreateQuiz && (
-              <div style={styles.createQuizForm}>
+              <div style={s.createForm}>
                 <input
                   type="text"
                   placeholder="Quiz name (e.g. Friday Night Trivia)"
                   value={newQuizName}
                   onChange={(e) => setNewQuizName(e.target.value)}
-                  style={styles.formInput}
+                  style={commonStyles.input}
                 />
                 <input
                   type="text"
                   placeholder="Access code (e.g. FRIDAY1)"
                   value={newQuizCode}
                   onChange={(e) => setNewQuizCode(e.target.value.toUpperCase())}
-                  style={styles.formInput}
+                  style={commonStyles.input}
                   maxLength={20}
                 />
-                <div style={styles.formButtons}>
-                  <button onClick={createQuiz} style={styles.saveButton}>Create Quiz</button>
-                  <button onClick={() => setShowCreateQuiz(false)} style={styles.cancelButton}>Cancel</button>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button onClick={createQuiz} style={s.saveBtn}>Create Quiz</button>
+                  <button onClick={() => setShowCreateQuiz(false)} style={s.ghostBtn}>Cancel</button>
                 </div>
               </div>
             )}
 
-            <div style={styles.quizGrid}>
+            <div style={s.quizGrid}>
               {quizzes.length === 0 ? (
-                <p style={styles.emptyText}>No quizzes yet. Create your first one!</p>
+                <p style={s.emptyText}>No quizzes yet. Create your first one!</p>
               ) : (
                 quizzes.map((quiz) => (
-                  <div key={quiz.id} style={styles.quizCard}>
-                    <div style={styles.quizCardTop}>
-                      <h3 style={styles.quizCardName}>{quiz.name}</h3>
-                      <span style={styles.codeBadge}>Code: {quiz.access_code}</span>
+                  <div key={quiz.id} style={s.quizCard}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <h3 style={s.quizCardName}>{quiz.name}</h3>
+                      <span style={commonStyles.badgeOrange}>
+                        {quiz.access_code}
+                      </span>
                     </div>
-                    <div style={styles.quizCardStats}>
+                    <div style={s.quizCardStats}>
                       <span>{quiz.round_count || 0} rounds</span>
-                      <span style={styles.statDivider}>·</span>
+                      <span style={s.statDot}>·</span>
                       <span>{quiz.team_count || 0} teams</span>
                     </div>
-                    <div style={styles.quizCardActions}>
+                    <div style={{ display: 'flex', gap: '10px' }}>
                       <button
                         onClick={() => setSelectedQuizId(quiz.id)}
-                        style={styles.openButton}
+                        style={s.openBtn}
                       >
                         Open
                       </button>
                       <button
                         onClick={() => deleteQuiz(quiz.id, quiz.name)}
-                        style={styles.deleteSmallButton}
+                        style={s.deleteSmBtn}
                       >
                         🗑️
                       </button>
@@ -339,42 +413,46 @@ function OrganizerDashboard() {
             </div>
           </div>
         </div>
+
+        {toast && <div style={commonStyles.toast}>{toast}</div>}
       </div>
     );
   }
 
   // ==========================================
-  // QUIZ DASHBOARD VIEW (quiz selected)
+  // QUIZ DASHBOARD VIEW
   // ==========================================
   const selectedQuiz = quizzes.find(q => q.id === selectedQuizId);
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <button onClick={() => setSelectedQuizId(null)} style={styles.backBtn}>
+    <div style={s.container}>
+      <div style={s.header}>
+        <button onClick={() => setSelectedQuizId(null)} style={s.backBtn}>
           ← All Quizzes
         </button>
         <div>
-          <h1 style={styles.title}>{selectedQuiz?.name || 'Quiz'}</h1>
-          <span style={styles.headerCode}>Code: {selectedQuiz?.access_code}</span>
+          <h1 style={s.title}>{selectedQuiz?.name || 'Quiz'}</h1>
+          <span style={{ color: colors.textMuted, fontSize: '14px' }}>
+            Code: {selectedQuiz?.access_code}
+          </span>
         </div>
-        <button onClick={resetQuiz} style={styles.resetButton}>
+        <button onClick={resetQuiz} style={s.dangerBtn}>
           🔄 Reset
         </button>
       </div>
 
-      <div style={styles.content}>
+      <div style={s.content}>
         {/* Teams Section */}
-        <div style={styles.section}>
-          <h2 style={styles.sectionTitle}>👥 Teams ({teams.length})</h2>
-          <div style={styles.cardContainer}>
+        <div style={s.section}>
+          <h2 style={s.sectionTitle}>👥 Teams ({teams.length})</h2>
+          <div style={s.teamGrid}>
             {teams.length === 0 ? (
-              <p style={styles.emptyText}>No teams have joined yet...</p>
+              <p style={s.emptyText}>No teams have joined yet...</p>
             ) : (
               teams.map((team) => (
-                <div key={team.id} style={styles.teamCard}>
-                  <span style={styles.teamName}>{team.team_name}</span>
-                  <span style={styles.teamTime}>
+                <div key={team.id} style={s.teamCard}>
+                  <span style={{ fontSize: '16px', fontWeight: '600' }}>{team.team_name}</span>
+                  <span style={{ fontSize: '12px', color: colors.textDim }}>
                     {new Date(team.created_at).toLocaleTimeString()}
                   </span>
                 </div>
@@ -384,49 +462,43 @@ function OrganizerDashboard() {
         </div>
 
         {/* Rounds Section */}
-        <div style={styles.section}>
-          <div style={styles.sectionHeader}>
-            <h2 style={styles.sectionTitle}>📋 Rounds</h2>
-            <button onClick={addRound} style={styles.addRoundButton}>
-              ➕ Add Round
-            </button>
+        <div style={s.section}>
+          <div style={s.sectionHeader}>
+            <h2 style={s.sectionTitle}>📋 Rounds</h2>
+            <button onClick={addRound} style={s.addBtn}>+ Add Round</button>
           </div>
-          <div style={styles.roundsContainer}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {rounds.length === 0 ? (
-              <p style={styles.emptyText}>No rounds yet. Add your first round!</p>
+              <p style={s.emptyText}>No rounds yet. Add your first round!</p>
             ) : (
               rounds.map((round) => (
-                <div key={round.id} style={styles.roundCard}>
-                  <div style={styles.roundInfo}>
-                    <h3 style={styles.roundTitle}>Round {round.round_number}</h3>
-                    <p style={styles.roundQuestions}>
+                <div key={round.id} style={s.roundCard}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <h3 style={{ fontSize: '18px', margin: 0, fontWeight: '700' }}>
+                      Round {round.round_number}
+                    </h3>
+                    <span style={{ color: colors.textMuted, fontSize: '14px' }}>
                       {round.question_count} questions
-                    </p>
+                    </span>
                     {round.is_active === 1 && (
-                      <span style={styles.activeBadge}>ACTIVE</span>
+                      <span style={commonStyles.badgeGreen}>ACTIVE</span>
                     )}
                   </div>
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <button
-                      onClick={() => fetchRoundAnswers(round.id)}
-                      style={styles.reviewButton}
-                    >
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => fetchRoundAnswers(round.id)} style={s.purpleBtn}>
                       📝 Review
                     </button>
                     <button
                       onClick={() => activateRound(round.id)}
                       style={{
-                        ...styles.activateButton,
-                        ...(round.is_active === 1 ? styles.activeButton : {})
+                        ...s.activateBtn,
+                        ...(round.is_active === 1 ? s.activeBtnDisabled : {})
                       }}
                       disabled={round.is_active === 1}
                     >
                       {round.is_active === 1 ? 'Active' : 'Activate'}
                     </button>
-                    <button
-                      onClick={() => deleteRound(round.id)}
-                      style={styles.deleteSmallButton}
-                    >
+                    <button onClick={() => deleteRound(round.id)} style={s.deleteSmBtn}>
                       🗑️
                     </button>
                   </div>
@@ -438,21 +510,26 @@ function OrganizerDashboard() {
 
         {/* Answer Grading Section */}
         {gradingRoundId && (
-          <div style={styles.section}>
-            <div style={styles.sectionHeader}>
-              <h2 style={styles.sectionTitle}>
+          <div style={s.section}>
+            <div style={s.sectionHeader}>
+              <h2 style={s.sectionTitle}>
                 📝 Answers — Round {rounds.find(r => r.id === gradingRoundId)?.round_number}
               </h2>
-              <button onClick={() => { setGradingRoundId(null); setRoundAnswers([]); }} style={styles.closeGradingButton}>
-                ✕ Close
-              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {/* SPREADSHEET EXPORT BUTTON */}
+                <button onClick={exportToSpreadsheet} style={s.exportBtn}>
+                  📊 Export CSV
+                </button>
+                <button onClick={() => { setGradingRoundId(null); setRoundAnswers([]); }} style={s.ghostBtn}>
+                  ✕ Close
+                </button>
+              </div>
             </div>
 
             {roundAnswers.length === 0 ? (
-              <p style={styles.emptyText}>No answers submitted yet for this round.</p>
+              <p style={s.emptyText}>No answers submitted yet for this round.</p>
             ) : (
               (() => {
-                // Group answers by question
                 const byQuestion = {};
                 roundAnswers.forEach(a => {
                   if (!byQuestion[a.question_id]) {
@@ -467,33 +544,36 @@ function OrganizerDashboard() {
                 });
 
                 return Object.entries(byQuestion).map(([qId, q]) => (
-                  <div key={qId} style={styles.gradingQuestionCard}>
-                    <div style={styles.gradingQuestionHeader}>
-                      <strong>{q.question_text}</strong>
-                      <span style={q.question_type === 'open' ? styles.typeBadgeOpen : styles.typeBadgeMC}>
+                  <div key={qId} style={s.gradingCard}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '8px' }}>
+                      <strong style={{ fontSize: '16px' }}>{q.question_text}</strong>
+                      <span style={q.question_type === 'open' ? commonStyles.badgePurple : commonStyles.badgeOrange}>
                         {q.question_type === 'open' ? 'Open' : 'MC'}
                       </span>
                     </div>
-                    <p style={styles.correctAnswerHint}>Correct: {q.correct_answer}</p>
-                    <div style={styles.answersGrid}>
+                    <p style={{ color: colors.success, fontSize: '13px', marginBottom: '12px', fontStyle: 'italic' }}>
+                      Correct: {q.correct_answer}
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       {q.answers.map(a => (
                         <div key={a.answer_id} style={{
-                          ...styles.answerRow,
-                          borderLeftColor: a.is_correct === 1 ? '#2ecc71' : a.is_correct === 0 ? '#e74c3c' : '#f39c12'
+                          ...s.answerRow,
+                          borderLeftColor: a.is_correct === 1 ? colors.success
+                            : a.is_correct === 0 ? colors.error : colors.warning,
                         }}>
-                          <div style={styles.answerInfo}>
-                            <span style={styles.answerTeam}>{a.team_name}</span>
-                            <span style={styles.answerValue}>
+                          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1 }}>
+                            <span style={{ fontWeight: '700', minWidth: '100px' }}>{a.team_name}</span>
+                            <span style={{ color: colors.textMuted }}>
                               {a.question_type === 'open' ? (a.answer_text || '—') : (a.selected_answer || '—')}
                             </span>
                           </div>
-                          {q.question_type === 'open' && (
-                            <div style={styles.gradeButtons}>
+                          {q.question_type === 'open' ? (
+                            <div style={{ display: 'flex', gap: '6px' }}>
                               <button
                                 onClick={() => gradeAnswer(a.answer_id, true)}
                                 style={{
-                                  ...styles.gradeBtn,
-                                  ...(a.is_correct === 1 ? styles.gradeBtnActiveCorrect : {})
+                                  ...s.gradeBtn,
+                                  ...(a.is_correct === 1 ? s.gradeBtnCorrect : {}),
                                 }}
                               >
                                 ✓
@@ -501,16 +581,18 @@ function OrganizerDashboard() {
                               <button
                                 onClick={() => gradeAnswer(a.answer_id, false)}
                                 style={{
-                                  ...styles.gradeBtn,
-                                  ...(a.is_correct === 0 ? styles.gradeBtnActiveWrong : {})
+                                  ...s.gradeBtn,
+                                  ...(a.is_correct === 0 ? s.gradeBtnWrong : {}),
                                 }}
                               >
                                 ✕
                               </button>
                             </div>
-                          )}
-                          {q.question_type !== 'open' && (
-                            <span style={a.is_correct === 1 ? styles.correctMark : styles.wrongMark}>
+                          ) : (
+                            <span style={{
+                              fontSize: '20px', fontWeight: '700',
+                              color: a.is_correct === 1 ? colors.success : colors.error,
+                            }}>
                               {a.is_correct === 1 ? '✓' : '✕'}
                             </span>
                           )}
@@ -525,34 +607,43 @@ function OrganizerDashboard() {
         )}
 
         {/* Leaderboard Section */}
-        <div style={styles.section}>
-          <h2 style={styles.sectionTitle}>🏆 Leaderboard</h2>
-          <div style={styles.leaderboardContainer}>
+        <div style={s.section}>
+          <div style={s.sectionHeader}>
+            <h2 style={s.sectionTitle}>🏆 Leaderboard</h2>
+            {leaderboard.length > 0 && (
+              <button onClick={exportLeaderboard} style={s.exportBtn}>
+                📊 Export CSV
+              </button>
+            )}
+          </div>
+          <div style={s.tableContainer}>
             {leaderboard.length === 0 ? (
-              <p style={styles.emptyText}>No scores yet...</p>
+              <p style={s.emptyText}>No scores yet...</p>
             ) : (
-              <table style={styles.table}>
+              <table style={s.table}>
                 <thead>
-                  <tr style={styles.tableHeader}>
-                    <th style={styles.tableHeaderCell}>Rank</th>
-                    <th style={styles.tableHeaderCell}>Team Name</th>
-                    <th style={styles.tableHeaderCell}>Score</th>
-                    <th style={styles.tableHeaderCell}>Answered</th>
+                  <tr style={s.tableHead}>
+                    <th style={s.th}>Rank</th>
+                    <th style={s.th}>Team Name</th>
+                    <th style={s.th}>Score</th>
+                    <th style={s.th}>Answered</th>
                   </tr>
                 </thead>
                 <tbody>
                   {leaderboard.map((team, index) => (
-                    <tr key={team.id} style={styles.tableRow}>
-                      <td style={styles.tableCell}>
-                        <span style={styles.rank}>
+                    <tr key={team.id} style={s.tr}>
+                      <td style={s.td}>
+                        <span style={{ fontSize: '20px' }}>
                           {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`}
                         </span>
                       </td>
-                      <td style={styles.tableCell}>{team.team_name}</td>
-                      <td style={styles.tableCell}>
-                        <strong style={styles.score}>{team.score}</strong>
+                      <td style={{ ...s.td, fontWeight: '600' }}>{team.team_name}</td>
+                      <td style={s.td}>
+                        <strong style={{ fontSize: '22px', color: colors.primary }}>
+                          {team.score}
+                        </strong>
                       </td>
-                      <td style={styles.tableCell}>{team.total_answered}</td>
+                      <td style={{ ...s.td, color: colors.textMuted }}>{team.total_answered}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -560,401 +651,149 @@ function OrganizerDashboard() {
             )}
           </div>
         </div>
-
       </div>
+
+      {toast && <div style={commonStyles.toast}>{toast}</div>}
     </div>
   );
 }
 
-const styles = {
+// ──────────────────────────────────────────────────────────
+// STYLES
+// ──────────────────────────────────────────────────────────
+const s = {
   container: {
-    minHeight: '100vh',
-    backgroundColor: '#1a1a2e',
-    color: '#fff',
-    padding: '20px',
+    ...commonStyles.pageContainer,
   },
   header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '40px',
-    flexWrap: 'wrap',
-    gap: '15px',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: '40px', flexWrap: 'wrap', gap: '15px',
+    maxWidth: '1200px', margin: '0 auto 40px',
   },
-  title: {
-    fontSize: '32px',
-    margin: 0,
-  },
-  headerCode: {
-    color: '#a0a0a0',
-    fontSize: '14px',
-  },
-  backBtn: {
-    padding: '10px 20px',
-    backgroundColor: '#16213e',
-    color: '#fff',
-    border: '1px solid #0f3460',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontSize: '14px',
-  },
-  content: {
-    maxWidth: '1200px',
-    margin: '0 auto',
-  },
-  section: {
-    marginBottom: '40px',
-  },
+  title: { fontSize: '28px', fontWeight: '800', margin: 0 },
+  content: { maxWidth: '1200px', margin: '0 auto' },
+
+  section: { marginBottom: '40px' },
   sectionHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '20px',
-    borderBottom: '2px solid #0f3460',
-    paddingBottom: '10px',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: '20px', borderBottom: `1px solid ${colors.border}`, paddingBottom: '12px',
   },
-  sectionTitle: {
-    fontSize: '24px',
-    margin: 0,
+  sectionTitle: { fontSize: '20px', fontWeight: '700', margin: 0 },
+
+  // Buttons
+  backBtn: {
+    ...commonStyles.buttonGhost,
   },
+  addBtn: {
+    padding: '10px 20px', backgroundColor: colors.primary, color: '#fff',
+    border: 'none', borderRadius: '8px', cursor: 'pointer',
+    fontWeight: '700', fontSize: '14px',
+  },
+  saveBtn: {
+    flex: 1, padding: '12px', backgroundColor: colors.success, color: '#fff',
+    border: 'none', borderRadius: '8px', cursor: 'pointer',
+    fontWeight: '700', fontSize: '15px',
+  },
+  ghostBtn: {
+    ...commonStyles.buttonGhost,
+  },
+  dangerBtn: { ...commonStyles.buttonDanger },
+  openBtn: {
+    flex: 1, padding: '10px', backgroundColor: colors.primary, color: '#fff',
+    border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '700', fontSize: '14px',
+  },
+  deleteSmBtn: {
+    padding: '10px 14px', backgroundColor: colors.bgCard,
+    border: `1px solid ${colors.error}`, borderRadius: '8px',
+    cursor: 'pointer', fontSize: '14px', color: colors.text,
+  },
+  purpleBtn: {
+    ...commonStyles.buttonSecondary,
+  },
+  activateBtn: {
+    padding: '10px 24px', fontSize: '14px', backgroundColor: colors.bgInput,
+    color: colors.text, border: `1px solid ${colors.border}`,
+    borderRadius: '8px', cursor: 'pointer', fontWeight: '600',
+  },
+  activeBtnDisabled: {
+    opacity: 0.4, cursor: 'not-allowed',
+  },
+  exportBtn: {
+    padding: '8px 16px', backgroundColor: colors.successMuted, color: colors.success,
+    border: `1px solid ${colors.success}`, borderRadius: '8px',
+    cursor: 'pointer', fontWeight: '600', fontSize: '13px',
+  },
+
   // Quiz grid
   quizGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-    gap: '20px',
-    marginTop: '20px',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+    gap: '16px', marginTop: '16px',
   },
   quizCard: {
-    backgroundColor: '#16213e',
-    padding: '25px',
-    borderRadius: '10px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '15px',
+    backgroundColor: colors.bgCard, padding: '24px', borderRadius: '14px',
+    display: 'flex', flexDirection: 'column', gap: '14px',
+    border: `1px solid ${colors.border}`,
   },
-  quizCardTop: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
+  quizCardName: { fontSize: '18px', margin: 0, fontWeight: '700' },
+  quizCardStats: { color: colors.textMuted, fontSize: '14px' },
+  statDot: { margin: '0 8px' },
+
+  // Create form
+  createForm: {
+    backgroundColor: colors.bgCard, padding: '24px', borderRadius: '14px',
+    marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '12px',
+    border: `1px solid ${colors.border}`,
   },
-  quizCardName: {
-    fontSize: '20px',
-    margin: 0,
-  },
-  codeBadge: {
-    backgroundColor: '#0f3460',
-    color: '#fff',
-    padding: '4px 10px',
-    borderRadius: '4px',
-    fontSize: '13px',
-    fontFamily: 'monospace',
-    letterSpacing: '1px',
-  },
-  quizCardStats: {
-    color: '#a0a0a0',
-    fontSize: '14px',
-  },
-  statDivider: {
-    margin: '0 8px',
-  },
-  quizCardActions: {
-    display: 'flex',
-    gap: '10px',
-  },
-  openButton: {
-    flex: 1,
-    padding: '10px',
-    backgroundColor: '#0f3460',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-    fontSize: '15px',
-  },
-  deleteSmallButton: {
-    padding: '10px 14px',
-    backgroundColor: '#16213e',
-    border: '1px solid #e74c3c',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontSize: '14px',
-  },
-  // Create quiz form
-  createQuizForm: {
-    backgroundColor: '#16213e',
-    padding: '25px',
-    borderRadius: '10px',
-    marginBottom: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-  },
-  formInput: {
-    padding: '12px',
-    fontSize: '16px',
-    border: 'none',
-    borderRadius: '5px',
-    boxSizing: 'border-box',
-  },
-  formButtons: {
-    display: 'flex',
-    gap: '10px',
-  },
-  saveButton: {
-    flex: 1,
-    padding: '12px',
-    backgroundColor: '#2ecc71',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-    fontSize: '15px',
-  },
-  cancelButton: {
-    padding: '12px 24px',
-    backgroundColor: '#555',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-  },
-  addRoundButton: {
-    padding: '10px 20px',
-    backgroundColor: '#2ecc71',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-    fontSize: '14px',
-  },
+
   // Teams
-  cardContainer: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-    gap: '15px',
+  teamGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    gap: '12px',
   },
   teamCard: {
-    backgroundColor: '#16213e',
-    padding: '15px',
-    borderRadius: '8px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '5px',
+    backgroundColor: colors.bgCard, padding: '16px', borderRadius: '10px',
+    display: 'flex', flexDirection: 'column', gap: '4px',
+    border: `1px solid ${colors.border}`,
   },
-  teamName: {
-    fontSize: '18px',
-    fontWeight: 'bold',
-  },
-  teamTime: {
-    fontSize: '12px',
-    color: '#a0a0a0',
-  },
-  emptyText: {
-    color: '#a0a0a0',
-    fontStyle: 'italic',
-  },
+
   // Rounds
-  roundsContainer: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '15px',
-  },
   roundCard: {
-    backgroundColor: '#16213e',
-    padding: '20px',
-    borderRadius: '8px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    backgroundColor: colors.bgCard, padding: '18px 20px', borderRadius: '12px',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    border: `1px solid ${colors.border}`,
   },
-  roundInfo: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '15px',
-  },
-  roundTitle: {
-    fontSize: '20px',
-    margin: 0,
-  },
-  roundQuestions: {
-    color: '#a0a0a0',
-    margin: 0,
-  },
-  activeBadge: {
-    backgroundColor: '#2ecc71',
-    color: '#fff',
-    padding: '5px 10px',
-    borderRadius: '5px',
-    fontSize: '12px',
-    fontWeight: 'bold',
-  },
-  activateButton: {
-    padding: '10px 30px',
-    fontSize: '16px',
-    backgroundColor: '#0f3460',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-  },
-  activeButton: {
-    backgroundColor: '#555',
-    cursor: 'not-allowed',
-  },
-  // Leaderboard
-  leaderboardContainer: {
-    backgroundColor: '#16213e',
-    borderRadius: '8px',
-    padding: '20px',
-    overflowX: 'auto',
-  },
-  table: {
-    width: '100%',
-    borderCollapse: 'collapse',
-  },
-  tableHeader: {
-    borderBottom: '2px solid #0f3460',
-  },
-  tableHeaderCell: {
-    padding: '12px',
-    textAlign: 'left',
-    color: '#a0a0a0',
-    fontWeight: 'bold',
-  },
-  tableRow: {
-    borderBottom: '1px solid #0f3460',
-  },
-  tableCell: {
-    padding: '15px 12px',
-  },
-  rank: {
-    fontSize: '20px',
-  },
-  score: {
-    fontSize: '24px',
-    color: '#2ecc71',
-  },
-  resetButton: {
-    padding: '12px 24px',
-    fontSize: '16px',
-    backgroundColor: '#e74c3c',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-  },
-  reviewButton: {
-    padding: '10px 20px',
-    fontSize: '14px',
-    backgroundColor: '#8e44ad',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-  },
-  closeGradingButton: {
-    padding: '8px 16px',
-    backgroundColor: '#555',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontSize: '14px',
-  },
-  gradingQuestionCard: {
-    backgroundColor: '#16213e',
-    padding: '20px',
-    borderRadius: '8px',
-    marginBottom: '15px',
-  },
-  gradingQuestionHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: '12px',
-    marginBottom: '5px',
-  },
-  typeBadgeMC: { backgroundColor: '#0f3460', color: '#fff', padding: '3px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' },
-  typeBadgeOpen: { backgroundColor: '#8e44ad', color: '#fff', padding: '3px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold' },
-  correctAnswerHint: {
-    color: '#2ecc71',
-    fontSize: '13px',
-    marginBottom: '12px',
-    fontStyle: 'italic',
-  },
-  answersGrid: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
+
+  // Grading
+  gradingCard: {
+    backgroundColor: colors.bgCard, padding: '20px', borderRadius: '12px',
+    marginBottom: '12px', border: `1px solid ${colors.border}`,
   },
   answerRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '10px 14px',
-    backgroundColor: '#1a1a3e',
-    borderRadius: '5px',
-    borderLeft: '4px solid #f39c12',
-  },
-  answerInfo: {
-    display: 'flex',
-    gap: '15px',
-    alignItems: 'center',
-    flex: 1,
-  },
-  answerTeam: {
-    fontWeight: 'bold',
-    minWidth: '120px',
-  },
-  answerValue: {
-    color: '#ccc',
-  },
-  gradeButtons: {
-    display: 'flex',
-    gap: '6px',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '10px 14px', backgroundColor: colors.bgInput, borderRadius: '8px',
+    borderLeft: `4px solid ${colors.warning}`,
   },
   gradeBtn: {
-    width: '36px',
-    height: '36px',
-    border: '2px solid #555',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontSize: '16px',
-    backgroundColor: 'transparent',
-    color: '#fff',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: '36px', height: '36px', border: `1px solid ${colors.border}`,
+    borderRadius: '8px', cursor: 'pointer', fontSize: '16px',
+    backgroundColor: 'transparent', color: colors.text,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
-  gradeBtnActiveCorrect: {
-    backgroundColor: '#2ecc71',
-    borderColor: '#2ecc71',
+  gradeBtnCorrect: { backgroundColor: colors.success, borderColor: colors.success },
+  gradeBtnWrong: { backgroundColor: colors.error, borderColor: colors.error },
+
+  // Leaderboard
+  tableContainer: {
+    backgroundColor: colors.bgCard, borderRadius: '12px', padding: '20px',
+    overflowX: 'auto', border: `1px solid ${colors.border}`,
   },
-  gradeBtnActiveWrong: {
-    backgroundColor: '#e74c3c',
-    borderColor: '#e74c3c',
-  },
-  correctMark: {
-    color: '#2ecc71',
-    fontSize: '20px',
-    fontWeight: 'bold',
-  },
-  wrongMark: {
-    color: '#e74c3c',
-    fontSize: '20px',
-    fontWeight: 'bold',
-  },
-  loadingText: {
-    textAlign: 'center',
-    fontSize: '18px',
-    marginTop: '50px',
-  },
+  table: { width: '100%', borderCollapse: 'collapse' },
+  tableHead: { borderBottom: `2px solid ${colors.border}` },
+  th: { padding: '12px', textAlign: 'left', color: colors.textMuted, fontWeight: '600', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '1px' },
+  tr: { borderBottom: `1px solid ${colors.border}` },
+  td: { padding: '14px 12px' },
+
+  emptyText: { color: colors.textDim, fontStyle: 'italic', padding: '20px 0' },
 };
 
 export default OrganizerDashboard;

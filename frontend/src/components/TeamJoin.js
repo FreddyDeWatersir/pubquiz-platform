@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { API_URL } from '../config';
+import { colors, commonStyles, shadows } from '../theme';
 
 function TeamJoin({ onJoinSuccess }) {
-  const [step, setStep] = useState('code'); // 'code' or 'name'
+  const [step, setStep] = useState('code');
   const [accessCode, setAccessCode] = useState('');
   const [quizId, setQuizId] = useState(null);
   const [quizName, setQuizName] = useState('');
@@ -10,25 +11,20 @@ function TeamJoin({ onJoinSuccess }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Step 1: Verify access code
   const handleVerifyCode = async () => {
     if (!accessCode.trim()) {
       setError('Please enter a quiz code');
       return;
     }
-
     setLoading(true);
     setError('');
-
     try {
       const response = await fetch(`${API_URL}/api/teams/verify-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accessCode: accessCode.trim() })
       });
-
       const data = await response.json();
-
       if (response.ok) {
         setQuizId(data.quizId);
         setQuizName(data.quizName);
@@ -38,31 +34,25 @@ function TeamJoin({ onJoinSuccess }) {
       }
     } catch (err) {
       setError('Could not connect to server');
-      console.error('Error verifying code:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Step 2: Register team
   const handleJoin = async () => {
     if (!teamName.trim()) {
       setError('Please enter a team name');
       return;
     }
-
     setLoading(true);
     setError('');
-
     try {
       const response = await fetch(`${API_URL}/api/teams/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ teamName: teamName.trim(), quizId })
       });
-
       const data = await response.json();
-
       if (response.ok) {
         onJoinSuccess(data.sessionToken, data.teamName);
       } else {
@@ -70,7 +60,6 @@ function TeamJoin({ onJoinSuccess }) {
       }
     } catch (err) {
       setError('Could not connect to server');
-      console.error('Error joining quiz:', err);
     } finally {
       setLoading(false);
     }
@@ -78,15 +67,20 @@ function TeamJoin({ onJoinSuccess }) {
 
   return (
     <div style={styles.container}>
+      {/* Background glow effects */}
+      <div style={styles.glowOrange} />
+      <div style={styles.glowPurple} />
+
       <div style={styles.card}>
-        <h1 style={styles.title}>🎯 PubQuiz</h1>
+        <div style={styles.logoMark}>⚡</div>
+        <h1 style={styles.title}>PubQuiz</h1>
 
         {step === 'code' ? (
           <>
             <p style={styles.subtitle}>Enter the quiz code to join</p>
             <input
               type="text"
-              placeholder="Quiz Code"
+              placeholder="QUIZ CODE"
               value={accessCode}
               onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
               onKeyPress={(e) => e.key === 'Enter' && handleVerifyCode()}
@@ -109,7 +103,7 @@ function TeamJoin({ onJoinSuccess }) {
             <div style={styles.quizBadge}>
               <span style={styles.quizBadgeText}>{quizName}</span>
             </div>
-            <p style={styles.subtitle}>Enter your team name</p>
+            <p style={styles.subtitle}>Choose your team name</p>
             <input
               type="text"
               placeholder="Team Name"
@@ -143,77 +137,88 @@ function TeamJoin({ onJoinSuccess }) {
 
 const styles = {
   container: {
-    display: 'flex',
-    justifyContent: 'center',
-    alignItems: 'center',
-    minHeight: '100vh',
-    backgroundColor: '#1a1a2e',
+    ...commonStyles.centeredContainer,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  glowOrange: {
+    position: 'absolute',
+    top: '20%',
+    right: '30%',
+    width: '300px',
+    height: '300px',
+    background: 'radial-gradient(circle, rgba(255,107,0,0.06) 0%, transparent 70%)',
+    pointerEvents: 'none',
+  },
+  glowPurple: {
+    position: 'absolute',
+    bottom: '20%',
+    left: '30%',
+    width: '300px',
+    height: '300px',
+    background: 'radial-gradient(circle, rgba(124,58,237,0.06) 0%, transparent 70%)',
+    pointerEvents: 'none',
   },
   card: {
-    backgroundColor: '#16213e',
-    padding: '40px',
-    borderRadius: '10px',
-    boxShadow: '0 4px 6px rgba(0, 0, 0, 0.3)',
+    ...commonStyles.card,
     textAlign: 'center',
-    maxWidth: '400px',
+    maxWidth: '420px',
     width: '90%',
+    position: 'relative',
+    zIndex: 1,
+    animation: 'slideUp 0.4s ease',
+  },
+  logoMark: {
+    fontSize: '40px',
+    marginBottom: '8px',
   },
   title: {
-    color: '#fff',
+    color: colors.text,
     fontSize: '32px',
-    marginBottom: '10px',
+    fontWeight: '800',
+    marginBottom: '8px',
+    letterSpacing: '-0.5px',
   },
   subtitle: {
-    color: '#a0a0a0',
+    color: colors.textMuted,
     marginBottom: '20px',
+    fontSize: '15px',
   },
   quizBadge: {
-    backgroundColor: '#0f3460',
-    padding: '10px 20px',
-    borderRadius: '8px',
-    marginBottom: '20px',
+    ...commonStyles.badgePurple,
     display: 'inline-block',
+    marginBottom: '16px',
+    padding: '8px 20px',
+    fontSize: '14px',
   },
   quizBadgeText: {
-    color: '#fff',
-    fontSize: '16px',
-    fontWeight: 'bold',
+    fontWeight: '700',
   },
   input: {
-    width: '100%',
-    padding: '15px',
-    fontSize: '18px',
-    border: 'none',
-    borderRadius: '5px',
-    marginBottom: '10px',
-    boxSizing: 'border-box',
+    ...commonStyles.input,
     textAlign: 'center',
     letterSpacing: '2px',
+    marginBottom: '12px',
+    fontSize: '18px',
   },
   button: {
-    width: '100%',
-    padding: '15px',
-    fontSize: '16px',
-    backgroundColor: '#0f3460',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontWeight: 'bold',
+    ...commonStyles.buttonPrimary,
+    marginTop: '4px',
   },
   backButton: {
     width: '100%',
     padding: '10px',
     fontSize: '14px',
     backgroundColor: 'transparent',
-    color: '#a0a0a0',
+    color: colors.textMuted,
     border: 'none',
     cursor: 'pointer',
     marginTop: '10px',
   },
   error: {
-    color: '#ff6b6b',
+    color: colors.error,
     marginBottom: '10px',
+    fontSize: '14px',
   },
 };
 
