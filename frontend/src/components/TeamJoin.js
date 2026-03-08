@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { API_URL } from '../config';
-import { colors, commonStyles, shadows } from '../theme';
+import { colors, commonStyles } from '../theme';
 
 function TeamJoin({ onJoinSuccess }) {
   const [step, setStep] = useState('code');

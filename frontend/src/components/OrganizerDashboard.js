@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { API_URL } from '../config';
 import io from 'socket.io-client';
-import { colors, commonStyles, shadows } from '../theme';
+import { colors, commonStyles } from '../theme';
 
 function OrganizerDashboard() {
   const [quizzes, setQuizzes] = useState([]);
