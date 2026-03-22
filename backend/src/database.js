@@ -27,6 +27,8 @@ function initializeDatabase(resolve, reject) {
       CREATE TABLE IF NOT EXISTS quizzes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
+        access_code TEXT NOT NULL,
+        status TEXT DEFAULT 'draft',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         is_active INTEGER DEFAULT 1
       )
@@ -49,10 +51,12 @@ function initializeDatabase(resolve, reject) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         round_id INTEGER NOT NULL,
         question_text TEXT NOT NULL,
-        option_a TEXT NOT NULL,
-        option_b TEXT NOT NULL,
-        option_c TEXT NOT NULL,
-        option_d TEXT NOT NULL,
+        question_type TEXT DEFAULT 'multiple_choice',
+        image_url TEXT,
+        option_a TEXT,
+        option_b TEXT,
+        option_c TEXT,
+        option_d TEXT,
         correct_answer TEXT NOT NULL,
         FOREIGN KEY (round_id) REFERENCES rounds(id)
       )
@@ -76,8 +80,9 @@ function initializeDatabase(resolve, reject) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         team_id INTEGER NOT NULL,
         question_id INTEGER NOT NULL,
-        selected_answer TEXT NOT NULL,
-        is_correct INTEGER DEFAULT 0,
+        selected_answer TEXT,
+        answer_text TEXT,
+        is_correct INTEGER DEFAULT NULL,
         submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (team_id) REFERENCES teams(id),
         FOREIGN KEY (question_id) REFERENCES questions(id),

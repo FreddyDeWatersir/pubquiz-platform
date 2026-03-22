@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { colors, commonStyles } from '../theme';
 
-// Simple password check (stored in code for now)
-// Later you can move this to backend authentication
-const ADMIN_PASSWORD = 'shoutoutWarnars'; // Change this to your password!
+const ADMIN_PASSWORD = 'shoutoutWarnars';
 
 function AdminLogin() {
   const [password, setPassword] = useState('');
@@ -11,26 +10,22 @@ function AdminLogin() {
   const navigate = useNavigate();
 
   const handleLogin = (e) => {
-    e.preventDefault(); // Prevent form from refreshing page
-    
-    // Check if password matches
+    e.preventDefault();
     if (password === ADMIN_PASSWORD) {
-      // Store authentication in browser (persists across refreshes)
       localStorage.setItem('adminAuth', 'true');
-      
-      // Redirect to admin page
       navigate('/admin/questions');
     } else {
       setError('Incorrect password');
-      setPassword(''); // Clear input
+      setPassword('');
     }
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <h1 style={styles.title}>🔐 Admin Login</h1>
-        <p style={styles.subtitle}>Enter password to manage questions</p>
+    <div style={commonStyles.centeredContainer}>
+      <div style={{ ...commonStyles.card, textAlign: 'center', maxWidth: '400px', width: '90%' }}>
+        <img src="/logo.png" alt="Quiz Masters of Melody" style={s.logo} />
+        <h1 style={s.title}>Admin Login</h1>
+        <p style={s.subtitle}>Enter password to manage questions</p>
         
         <form onSubmit={handleLogin}>
           <input
@@ -38,13 +33,13 @@ function AdminLogin() {
             placeholder="Admin Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            style={styles.input}
+            style={commonStyles.input}
             autoFocus
           />
           
-          {error && <p style={styles.error}>{error}</p>}
+          {error && <p style={s.error}>{error}</p>}
           
-          <button type="submit" style={styles.button}>
+          <button type="submit" style={{ ...commonStyles.buttonPrimary, marginTop: '12px' }}>
             Login
           </button>
         </form>
@@ -53,56 +48,11 @@ function AdminLogin() {
   );
 }
 
-const styles = {
-  container: {
-    display: 'flex',
-    justifyContent: 'center',
-    alignItems: 'center',
-    minHeight: '100vh',
-    backgroundColor: '#1a1a2e',
-  },
-  card: {
-    backgroundColor: '#16213e',
-    padding: '40px',
-    borderRadius: '10px',
-    boxShadow: '0 4px 6px rgba(0, 0, 0, 0.3)',
-    textAlign: 'center',
-    maxWidth: '400px',
-    width: '90%',
-  },
-  title: {
-    color: '#fff',
-    fontSize: '32px',
-    marginBottom: '10px',
-  },
-  subtitle: {
-    color: '#a0a0a0',
-    marginBottom: '30px',
-  },
-  input: {
-    width: '100%',
-    padding: '15px',
-    fontSize: '16px',
-    border: 'none',
-    borderRadius: '5px',
-    marginBottom: '10px',
-    boxSizing: 'border-box',
-  },
-  button: {
-    width: '100%',
-    padding: '15px',
-    fontSize: '16px',
-    backgroundColor: '#0f3460',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontWeight: 'bold',
-  },
-  error: {
-    color: '#ff6b6b',
-    marginBottom: '10px',
-  },
+const s = {
+  logo: { width: '140px', height: 'auto', marginBottom: '16px' },
+  title: { color: colors.text, fontSize: '28px', marginBottom: '6px', fontWeight: '700' },
+  subtitle: { color: colors.textMuted, marginBottom: '24px', fontSize: '15px' },
+  error: { color: colors.error, marginTop: '10px', marginBottom: '0', fontSize: '14px' },
 };
 
 export default AdminLogin;

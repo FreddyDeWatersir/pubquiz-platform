@@ -3,7 +3,35 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { dbHelpers } = require('../database');
 
-// Register a new team
+// Verify quiz access code (step 1: team enters code)
+router.post('/verify-code', async (req, res) => {
+  const { accessCode } = req.body;
+
+  if (!accessCode) {
+    return res.status(400).json({ error: 'Access code is required' });
+  }
+
+  try {
+    const quiz = await dbHelpers.get(
+      'SELECT id, name FROM quizzes WHERE access_code = ? AND status != ?',
+      [accessCode.toUpperCase(), 'archived']
+    );
+
+    if (!quiz) {
+      return res.status(404).json({ error: 'Invalid access code' });
+    }
+
+    res.json({
+      quizId: quiz.id,
+      quizName: quiz.name
+    });
+  } catch (error) {
+    console.error('Error verifying code:', error);
+    res.status(500).json({ error: 'Failed to verify access code' });
+  }
+});
+
+// Register a new team (step 2: team enters name)
 router.post('/register', async (req, res) => {
   const { teamName, quizId } = req.body;
 
@@ -13,6 +41,12 @@ router.post('/register', async (req, res) => {
   }
 
   try {
+    // Verify quiz exists
+    const quiz = await dbHelpers.get('SELECT id, name FROM quizzes WHERE id = ?', [quizId]);
+    if (!quiz) {
+      return res.status(404).json({ error: 'Quiz not found' });
+    }
+
     // Check if team name already exists in this quiz
     const existingTeam = await dbHelpers.get(
       'SELECT id FROM teams WHERE team_name = ? AND quiz_id = ?',
@@ -33,6 +67,8 @@ router.post('/register', async (req, res) => {
     res.status(201).json({
       teamId: result.id,
       teamName,
+      quizId: quiz.id,
+      quizName: quiz.name,
       sessionToken,
       message: 'Team registered successfully'
     });

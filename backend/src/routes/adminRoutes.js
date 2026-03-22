@@ -3,23 +3,30 @@ const router = express.Router();
 const { dbHelpers } = require('../database');
 
 // ==========================================
-// GET ALL QUESTIONS
+// GET ALL QUESTIONS (optionally filtered by quiz)
 // ==========================================
-// Purpose: Fetch all questions from database
-// Used by: Admin question list page
 router.get('/questions', async (req, res) => {
+  const { quiz_id } = req.query;
+
   try {
-    // SQL query to get all questions with their round info
-    const questions = await dbHelpers.all(
-      `SELECT 
-        q.*,                          -- All question columns
-        r.round_number               -- Round number from rounds table
+    let sql = `
+      SELECT 
+        q.*,
+        r.round_number,
+        r.quiz_id
        FROM questions q
-       LEFT JOIN rounds r ON q.round_id = r.id    -- Join to get round info
-       ORDER BY r.round_number, q.id              -- Sort by round, then question
-      `
-    );
-    
+       LEFT JOIN rounds r ON q.round_id = r.id
+    `;
+    const params = [];
+
+    if (quiz_id) {
+      sql += ' WHERE r.quiz_id = ?';
+      params.push(quiz_id);
+    }
+
+    sql += ' ORDER BY r.quiz_id, r.round_number, q.id';
+
+    const questions = await dbHelpers.all(sql, params);
     res.json(questions);
   } catch (error) {
     console.error('Error fetching questions:', error);
@@ -30,54 +37,47 @@ router.get('/questions', async (req, res) => {
 // ==========================================
 // CREATE NEW QUESTION
 // ==========================================
-// Purpose: Add a new question to the database
-// Used by: Admin "Add Question" form
 router.post('/questions', async (req, res) => {
-  // Extract data from request body
   const { 
-    round_id,           // Which round this question belongs to
-    question_text,      // The question itself
-    option_a,           // First option
-    option_b,           // Second option
-    option_c,           // Third option
-    option_d,           // Fourth option
-    correct_answer      // Which option is correct (A, B, C, or D)
+    round_id,
+    question_text,
+    question_type,
+    image_url,
+    option_a,
+    option_b,
+    option_c,
+    option_d,
+    correct_answer
   } = req.body;
 
-  // Validation: Make sure all fields are provided
-  if (!round_id || !question_text || !option_a || !option_b || 
-      !option_c || !option_d || !correct_answer) {
-    return res.status(400).json({ error: 'All fields are required' });
+  const type = question_type || 'multiple_choice';
+
+  if (!round_id || !question_text || !correct_answer) {
+    return res.status(400).json({ error: 'Round, question text, and correct answer are required' });
   }
 
-  // Validation: Correct answer must be A, B, C, or D
-  if (!['A', 'B', 'C', 'D'].includes(correct_answer)) {
-    return res.status(400).json({ error: 'Correct answer must be A, B, C, or D' });
+  // Multiple choice requires all options
+  if (type === 'multiple_choice') {
+    if (!option_a || !option_b || !option_c || !option_d) {
+      return res.status(400).json({ error: 'All four options are required for multiple choice questions' });
+    }
+    if (!['A', 'B', 'C', 'D'].includes(correct_answer)) {
+      return res.status(400).json({ error: 'Correct answer must be A, B, C, or D' });
+    }
   }
 
   try {
-    // Insert the question into database
     const result = await dbHelpers.run(
       `INSERT INTO questions 
-       (round_id, question_text, option_a, option_b, option_c, option_d, correct_answer)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [round_id, question_text, option_a, option_b, option_c, option_d, correct_answer]
+       (round_id, question_text, question_type, image_url, option_a, option_b, option_c, option_d, correct_answer)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [round_id, question_text, type, image_url || null, 
+       option_a || null, option_b || null, option_c || null, option_d || null, correct_answer]
     );
 
-    // Return the new question with its ID
     res.status(201).json({
       message: 'Question created successfully',
-      questionId: result.id,
-      question: {
-        id: result.id,
-        round_id,
-        question_text,
-        option_a,
-        option_b,
-        option_c,
-        option_d,
-        correct_answer
-      }
+      questionId: result.id
     });
   } catch (error) {
     console.error('Error creating question:', error);
@@ -88,13 +88,13 @@ router.post('/questions', async (req, res) => {
 // ==========================================
 // UPDATE EXISTING QUESTION
 // ==========================================
-// Purpose: Edit a question that already exists
-// Used by: Admin "Edit Question" form
 router.put('/questions/:id', async (req, res) => {
-  const { id } = req.params;  // Question ID from URL
+  const { id } = req.params;
   const { 
     round_id,
     question_text,
+    question_type,
+    image_url,
     option_a,
     option_b,
     option_c,
@@ -102,44 +102,32 @@ router.put('/questions/:id', async (req, res) => {
     correct_answer
   } = req.body;
 
-  // Validation
-  if (!round_id || !question_text || !option_a || !option_b || 
-      !option_c || !option_d || !correct_answer) {
-    return res.status(400).json({ error: 'All fields are required' });
+  const type = question_type || 'multiple_choice';
+
+  if (!round_id || !question_text || !correct_answer) {
+    return res.status(400).json({ error: 'Round, question text, and correct answer are required' });
   }
 
-  if (!['A', 'B', 'C', 'D'].includes(correct_answer)) {
-    return res.status(400).json({ error: 'Correct answer must be A, B, C, or D' });
+  if (type === 'multiple_choice') {
+    if (!option_a || !option_b || !option_c || !option_d) {
+      return res.status(400).json({ error: 'All four options are required for multiple choice questions' });
+    }
+    if (!['A', 'B', 'C', 'D'].includes(correct_answer)) {
+      return res.status(400).json({ error: 'Correct answer must be A, B, C, or D' });
+    }
   }
 
   try {
-    // Update the question in database
     await dbHelpers.run(
       `UPDATE questions 
-       SET round_id = ?,
-           question_text = ?,
-           option_a = ?,
-           option_b = ?,
-           option_c = ?,
-           option_d = ?,
-           correct_answer = ?
+       SET round_id = ?, question_text = ?, question_type = ?, image_url = ?,
+           option_a = ?, option_b = ?, option_c = ?, option_d = ?, correct_answer = ?
        WHERE id = ?`,
-      [round_id, question_text, option_a, option_b, option_c, option_d, correct_answer, id]
+      [round_id, question_text, type, image_url || null,
+       option_a || null, option_b || null, option_c || null, option_d || null, correct_answer, id]
     );
 
-    res.json({
-      message: 'Question updated successfully',
-      question: {
-        id,
-        round_id,
-        question_text,
-        option_a,
-        option_b,
-        option_c,
-        option_d,
-        correct_answer
-      }
-    });
+    res.json({ message: 'Question updated successfully' });
   } catch (error) {
     console.error('Error updating question:', error);
     res.status(500).json({ error: 'Failed to update question' });
@@ -149,25 +137,12 @@ router.put('/questions/:id', async (req, res) => {
 // ==========================================
 // DELETE QUESTION
 // ==========================================
-// Purpose: Remove a question from database
-// Used by: Admin question list "Delete" button
 router.delete('/questions/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    // First, delete any answers to this question
-    // (Otherwise we'd have orphaned answers)
-    await dbHelpers.run(
-      'DELETE FROM answers WHERE question_id = ?',
-      [id]
-    );
-
-    // Then delete the question itself
-    await dbHelpers.run(
-      'DELETE FROM questions WHERE id = ?',
-      [id]
-    );
-
+    await dbHelpers.run('DELETE FROM answers WHERE question_id = ?', [id]);
+    await dbHelpers.run('DELETE FROM questions WHERE id = ?', [id]);
     res.json({ message: 'Question deleted successfully' });
   } catch (error) {
     console.error('Error deleting question:', error);
@@ -176,22 +151,29 @@ router.delete('/questions/:id', async (req, res) => {
 });
 
 // ==========================================
-// GET ALL ROUNDS
+// GET ROUNDS (optionally filtered by quiz)
 // ==========================================
-// Purpose: List all available rounds
-// Used by: Admin page to show round options in dropdown
 router.get('/rounds', async (req, res) => {
+  const { quiz_id } = req.query;
+
   try {
-    const rounds = await dbHelpers.all(
-      `SELECT 
+    let sql = `
+      SELECT 
         r.*,
         COUNT(q.id) as question_count
        FROM rounds r
        LEFT JOIN questions q ON r.id = q.round_id
-       GROUP BY r.id
-       ORDER BY r.round_number`
-    );
+    `;
+    const params = [];
 
+    if (quiz_id) {
+      sql += ' WHERE r.quiz_id = ?';
+      params.push(quiz_id);
+    }
+
+    sql += ' GROUP BY r.id ORDER BY r.round_number';
+
+    const rounds = await dbHelpers.all(sql, params);
     res.json(rounds);
   } catch (error) {
     console.error('Error fetching rounds:', error);

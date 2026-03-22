@@ -35,7 +35,9 @@ function setupSocketHandlers(io) {
 
           if (currentRound) {
             const questions = await dbHelpers.all(
-              'SELECT id, question_text, option_a, option_b, option_c, option_d FROM questions WHERE round_id = ?',
+              `SELECT id, question_text, question_type, image_url, 
+                      option_a, option_b, option_c, option_d 
+               FROM questions WHERE round_id = ?`,
               [currentRound.id]
             );
 
@@ -65,23 +67,31 @@ function setupSocketHandlers(io) {
 
     // Team submits answers
     socket.on('team:submit', async (data) => {
-      const { answers } = data; // Array of { questionId, selectedAnswer }
+      const { answers } = data; // Array of { questionId, selectedAnswer, answerText }
       
       try {
-        // Save answers to database
         for (const answer of answers) {
           const question = await dbHelpers.get(
-            'SELECT correct_answer FROM questions WHERE id = ?',
+            'SELECT correct_answer, question_type FROM questions WHERE id = ?',
             [answer.questionId]
           );
 
-          const isCorrect = question.correct_answer === answer.selectedAnswer ? 1 : 0;
-
-          await dbHelpers.run(
-            `INSERT OR REPLACE INTO answers (team_id, question_id, selected_answer, is_correct)
-             VALUES (?, ?, ?, ?)`,
-            [socket.teamId, answer.questionId, answer.selectedAnswer, isCorrect]
-          );
+          if (question.question_type === 'open') {
+            // Open question: store text, leave is_correct as NULL (pending review)
+            await dbHelpers.run(
+              `INSERT OR REPLACE INTO answers (team_id, question_id, answer_text, is_correct)
+               VALUES (?, ?, ?, NULL)`,
+              [socket.teamId, answer.questionId, answer.answerText || '']
+            );
+          } else {
+            // Multiple choice: auto-grade
+            const isCorrect = question.correct_answer === answer.selectedAnswer ? 1 : 0;
+            await dbHelpers.run(
+              `INSERT OR REPLACE INTO answers (team_id, question_id, selected_answer, is_correct)
+               VALUES (?, ?, ?, ?)`,
+              [socket.teamId, answer.questionId, answer.selectedAnswer, isCorrect]
+            );
+          }
         }
 
         socket.emit('team:submitted', { success: true });
@@ -104,7 +114,6 @@ function setupSocketHandlers(io) {
       const { roundId } = data;
       
       try {
-        // Get round info
         const round = await dbHelpers.get('SELECT quiz_id, round_number FROM rounds WHERE id = ?', [roundId]);
         
         // Deactivate all rounds for this quiz first
@@ -121,7 +130,9 @@ function setupSocketHandlers(io) {
 
         // Get questions for this round (WITHOUT correct answers)
         const questions = await dbHelpers.all(
-          'SELECT id, question_text, option_a, option_b, option_c, option_d FROM questions WHERE round_id = ?',
+          `SELECT id, question_text, question_type, image_url, 
+                  option_a, option_b, option_c, option_d 
+           FROM questions WHERE round_id = ?`,
           [roundId]
         );
 

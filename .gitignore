@@ -91,6 +91,9 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 
+# Uploaded images
+backend/uploads/
+
 # Backup files
 *.bak
 *.backup
