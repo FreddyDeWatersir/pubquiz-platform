@@ -98,7 +98,7 @@ function setupSocketHandlers(io) {
           if (question.question_type === 'open') {
             // Open question: store text, leave is_correct as NULL (pending review)
             await dbHelpers.run(
-              `INSERT OR REPLACE INTO answers (team_id, question_id, answer_text, is_correct)
+              `REPLACE INTO answers (team_id, question_id, answer_text, is_correct)
                VALUES (?, ?, ?, NULL)`,
               [socket.teamId, answer.questionId, answer.answerText || '']
             );
@@ -106,7 +106,7 @@ function setupSocketHandlers(io) {
             // Multiple choice: auto-grade
             const isCorrect = question.correct_answer === answer.selectedAnswer ? 1 : 0;
             await dbHelpers.run(
-              `INSERT OR REPLACE INTO answers (team_id, question_id, selected_answer, is_correct)
+              `REPLACE INTO answers (team_id, question_id, selected_answer, is_correct)
                VALUES (?, ?, ?, ?)`,
               [socket.teamId, answer.questionId, answer.selectedAnswer, isCorrect]
             );
