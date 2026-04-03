@@ -71,6 +71,7 @@ function TeamPage() {
 
     newSocket.on('team:joined', () => setConnectionStatus('connected'));
     newSocket.on('round:started', (data) => setQuestions(data.questions));
+    newSocket.on('round:closed', () => setQuestions(null));
     newSocket.on('team:submitted', () => {
       showToast('Answers submitted! ✓');
       setQuestions(null);

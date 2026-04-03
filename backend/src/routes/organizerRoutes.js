@@ -284,6 +284,40 @@ router.get('/quiz/:quizId/rounds', async (req, res) => {
   }
 });
 
+// Close a round (prevent further submissions)
+router.post('/rounds/:roundId/close', async (req, res) => {
+  const { roundId } = req.params;
+
+  try {
+    await dbHelpers.run(
+      'UPDATE rounds SET is_closed = 1 WHERE id = ?',
+      [roundId]
+    );
+
+    res.json({ message: 'Round closed successfully' });
+  } catch (error) {
+    console.error('Error closing round:', error);
+    res.status(500).json({ error: 'Failed to close round' });
+  }
+});
+
+// Reopen a closed round
+router.post('/rounds/:roundId/reopen', async (req, res) => {
+  const { roundId } = req.params;
+
+  try {
+    await dbHelpers.run(
+      'UPDATE rounds SET is_closed = 0 WHERE id = ?',
+      [roundId]
+    );
+
+    res.json({ message: 'Round reopened successfully' });
+  } catch (error) {
+    console.error('Error reopening round:', error);
+    res.status(500).json({ error: 'Failed to reopen round' });
+  }
+});
+
 
 // Get leaderboard with scores
 router.get('/quiz/:quizId/leaderboard', async (req, res) => {

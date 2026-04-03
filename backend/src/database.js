@@ -41,9 +41,18 @@ function initializeDatabase(resolve, reject) {
         quiz_id INTEGER NOT NULL,
         round_number INTEGER NOT NULL,
         is_active INTEGER DEFAULT 0,
+        is_closed INTEGER DEFAULT 0,
         FOREIGN KEY (quiz_id) REFERENCES quizzes(id)
       )
     `);
+
+    // Migration: add is_closed column if it doesn't exist (for existing databases)
+    db.run(`ALTER TABLE rounds ADD COLUMN is_closed INTEGER DEFAULT 0`, (err) => {
+      // Ignore "duplicate column" errors — means column already exists
+      if (err && !err.message.includes('duplicate column')) {
+        console.error('Migration error:', err);
+      }
+    });
 
     // Questions table
     db.run(`

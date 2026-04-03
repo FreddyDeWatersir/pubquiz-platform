@@ -55,6 +55,16 @@ function OrganizerDashboard() {
       fetchRounds(selectedQuizId);
     });
 
+    newSocket.on('organizer:roundClosed', (data) => {
+      showToast('Round closed! Teams can no longer submit answers.');
+      fetchRounds(selectedQuizId);
+    });
+
+    newSocket.on('organizer:roundReopened', (data) => {
+      showToast('Round reopened! Teams can submit answers again.');
+      fetchRounds(selectedQuizId);
+    });
+
     fetchTeams(selectedQuizId);
     fetchRounds(selectedQuizId);
     fetchLeaderboard(selectedQuizId);
@@ -185,6 +195,22 @@ function OrganizerDashboard() {
     socket.emit('organizer:activateRound', { roundId });
   };
 
+  const closeRound = (roundId) => {
+    if (!socket) {
+      showToast('WebSocket not connected!');
+      return;
+    }
+    socket.emit('organizer:closeRound', { roundId });
+  };
+
+  const reopenRound = (roundId) => {
+    if (!socket) {
+      showToast('WebSocket not connected!');
+      return;
+    }
+    socket.emit('organizer:reopenRound', { roundId });
+  };
+
   const resetQuiz = async () => {
     if (!window.confirm('⚠️ This will DELETE all teams, answers, and reset rounds. Are you sure?')) return;
     try {
@@ -252,9 +278,23 @@ function OrganizerDashboard() {
       return;
     }
 
-    // Build CSV rows
-    const headers = ['Question', 'Type', 'Correct Answer', 'Team', 'Team Answer', 'Result'];
-    const rows = roundAnswers.map(a => {
+    // Pivot data: one row per team, one column per question
+    // First, collect unique questions (in order) and unique teams
+    const questionsMap = new Map(); // questionId -> { text, correctAnswer, type }
+    const teamsMap = new Map();     // teamName -> { questionId -> { answer, result } }
+
+    roundAnswers.forEach(a => {
+      if (!questionsMap.has(a.question_id)) {
+        questionsMap.set(a.question_id, {
+          text: a.question_text,
+          correct: a.correct_answer,
+          type: a.question_type,
+        });
+      }
+      if (!teamsMap.has(a.team_name)) {
+        teamsMap.set(a.team_name, {});
+      }
+
       const teamAnswer = a.question_type === 'open'
         ? (a.answer_text || '—')
         : (a.selected_answer || '—');
@@ -262,18 +302,51 @@ function OrganizerDashboard() {
         : a.is_correct === 0 ? 'Wrong'
         : 'Pending';
 
-      // CSV escaping: wrap in quotes if the value contains commas or quotes
-      return [
-        a.question_text,
-        a.question_type,
-        a.correct_answer,
-        a.team_name,
-        teamAnswer,
-        result,
-      ].map(val => `"${String(val).replace(/"/g, '""')}"`).join(',');
+      teamsMap.get(a.team_name)[a.question_id] = { answer: teamAnswer, result };
     });
 
-    const csv = [headers.join(','), ...rows].join('\n');
+    const questionIds = [...questionsMap.keys()];
+    const questionEntries = [...questionsMap.entries()];
+
+    // Build headers: Team | Q1 Answer | Q1 Result | Q2 Answer | Q2 Result | ... | Total Correct
+    const headers = ['Team'];
+    questionEntries.forEach(([, q], i) => {
+      // Truncate question text for header (max 40 chars)
+      const label = q.text.length > 40 ? q.text.substring(0, 37) + '...' : q.text;
+      headers.push(`Q${i + 1}: ${label}`);
+      headers.push(`Q${i + 1} Result`);
+    });
+    headers.push('Total Correct');
+
+    // Add a "Correct Answers" reference row at the top
+    const correctRow = ['CORRECT ANSWERS'];
+    questionEntries.forEach(([, q]) => {
+      correctRow.push(q.correct);
+      correctRow.push('—');
+    });
+    correctRow.push('—');
+
+    // Build team rows
+    const rows = [...teamsMap.entries()].map(([teamName, answers]) => {
+      let correctCount = 0;
+      const cells = [teamName];
+
+      questionIds.forEach(qId => {
+        const a = answers[qId];
+        cells.push(a ? a.answer : '—');
+        cells.push(a ? a.result : 'No answer');
+        if (a && a.result === 'Correct') correctCount++;
+      });
+
+      cells.push(correctCount);
+      return cells.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',');
+    });
+
+    const csv = [
+      headers.map(h => `"${String(h).replace(/"/g, '""')}"`).join(','),
+      correctRow.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','),
+      ...rows
+    ].join('\n');
 
     // Trigger download
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -483,23 +556,36 @@ function OrganizerDashboard() {
                     <span style={{ color: colors.textMuted, fontSize: '14px' }}>
                       {round.question_count} questions
                     </span>
-                    {round.is_active === 1 && (
+                    {round.is_active === 1 && !round.is_closed && (
                       <span style={commonStyles.badgeGreen}>ACTIVE</span>
+                    )}
+                    {round.is_closed === 1 && (
+                      <span style={s.closedBadge}>CLOSED</span>
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={() => fetchRoundAnswers(round.id)} style={s.purpleBtn}>
                       📝 Review
                     </button>
+                    {round.is_active === 1 && !round.is_closed && (
+                      <button onClick={() => closeRound(round.id)} style={s.closeBtn}>
+                        🔒 Close
+                      </button>
+                    )}
+                    {round.is_closed === 1 && (
+                      <button onClick={() => reopenRound(round.id)} style={s.reopenBtn}>
+                        🔓 Reopen
+                      </button>
+                    )}
                     <button
                       onClick={() => activateRound(round.id)}
                       style={{
                         ...s.activateBtn,
-                        ...(round.is_active === 1 ? s.activeBtnDisabled : {})
+                        ...(round.is_active === 1 && !round.is_closed ? s.activeBtnDisabled : {})
                       }}
-                      disabled={round.is_active === 1}
+                      disabled={round.is_active === 1 && !round.is_closed}
                     >
-                      {round.is_active === 1 ? 'Active' : 'Activate'}
+                      {round.is_active === 1 && !round.is_closed ? 'Active' : 'Activate'}
                     </button>
                     <button onClick={() => deleteRound(round.id)} style={s.deleteSmBtn}>
                       🗑️
@@ -720,6 +806,22 @@ const s = {
   },
   activeBtnDisabled: {
     opacity: 0.4, cursor: 'not-allowed',
+  },
+  closeBtn: {
+    padding: '10px 20px', fontSize: '14px', backgroundColor: colors.warningMuted || 'rgba(243,156,18,0.15)',
+    color: colors.warning, border: `1px solid ${colors.warning}`,
+    borderRadius: '8px', cursor: 'pointer', fontWeight: '600',
+  },
+  reopenBtn: {
+    padding: '10px 20px', fontSize: '14px', backgroundColor: colors.bgInput,
+    color: colors.textMuted, border: `1px solid ${colors.border}`,
+    borderRadius: '8px', cursor: 'pointer', fontWeight: '600',
+  },
+  closedBadge: {
+    padding: '4px 10px', borderRadius: '6px', fontSize: '11px',
+    fontWeight: '700', letterSpacing: '1px', textTransform: 'uppercase',
+    backgroundColor: colors.errorMuted || 'rgba(231,76,60,0.15)',
+    color: colors.error, border: `1px solid ${colors.error}`,
   },
   exportBtn: {
     padding: '8px 16px', backgroundColor: colors.successMuted, color: colors.success,

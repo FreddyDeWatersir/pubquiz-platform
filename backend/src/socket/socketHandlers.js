@@ -34,17 +34,21 @@ function setupSocketHandlers(io) {
           );
 
           if (currentRound) {
-            const questions = await dbHelpers.all(
-              `SELECT id, question_text, question_type, image_url, 
-                      option_a, option_b, option_c, option_d 
-               FROM questions WHERE round_id = ?`,
-              [currentRound.id]
-            );
+            // Only send questions if round is not closed
+            if (!currentRound.is_closed) {
+              const questions = await dbHelpers.all(
+                `SELECT id, question_text, question_type, image_url, 
+                        option_a, option_b, option_c, option_d 
+                 FROM questions WHERE round_id = ?`,
+                [currentRound.id]
+              );
 
-            socket.emit('round:started', {
-              roundNumber: currentRound.round_number,
-              questions
-            });
+              socket.emit('round:started', {
+                roundNumber: currentRound.round_number,
+                questions
+              });
+            }
+            // If round is closed, team stays on waiting screen
           }
         } else {
           socket.emit('error', { message: 'Invalid session token' });
@@ -70,6 +74,21 @@ function setupSocketHandlers(io) {
       const { answers } = data; // Array of { questionId, selectedAnswer, answerText }
       
       try {
+        // Check if the round is closed before accepting answers
+        if (answers.length > 0) {
+          const question = await dbHelpers.get(
+            `SELECT r.is_closed FROM questions q 
+             JOIN rounds r ON q.round_id = r.id 
+             WHERE q.id = ?`,
+            [answers[0].questionId]
+          );
+          if (question && question.is_closed) {
+            socket.emit('error', { message: 'This round is closed. Answers can no longer be submitted.' });
+            socket.emit('round:closed', {});
+            return;
+          }
+        }
+
         for (const answer of answers) {
           const question = await dbHelpers.get(
             'SELECT correct_answer, question_type FROM questions WHERE id = ?',
@@ -122,9 +141,9 @@ function setupSocketHandlers(io) {
           [round.quiz_id]
         );
 
-        // Activate the selected round
+        // Activate the selected round (and ensure it's open)
         await dbHelpers.run(
-          'UPDATE rounds SET is_active = 1 WHERE id = ?',
+          'UPDATE rounds SET is_active = 1, is_closed = 0 WHERE id = ?',
           [roundId]
         );
 
@@ -148,6 +167,64 @@ function setupSocketHandlers(io) {
       } catch (error) {
         console.error('Error activating round:', error);
         socket.emit('error', { message: 'Failed to activate round' });
+      }
+    });
+
+    // Organizer closes a round (no more submissions)
+    socket.on('organizer:closeRound', async (data) => {
+      const { roundId } = data;
+
+      try {
+        const round = await dbHelpers.get('SELECT quiz_id, round_number FROM rounds WHERE id = ?', [roundId]);
+
+        await dbHelpers.run(
+          'UPDATE rounds SET is_closed = 1 WHERE id = ?',
+          [roundId]
+        );
+
+        // Tell all teams the round is closed — clears their questions
+        io.to(`quiz-${round.quiz_id}`).emit('round:closed', {
+          roundNumber: round.round_number
+        });
+
+        socket.emit('organizer:roundClosed', { success: true, roundId });
+        console.log(`Round ${roundId} closed for quiz ${round.quiz_id}`);
+      } catch (error) {
+        console.error('Error closing round:', error);
+        socket.emit('error', { message: 'Failed to close round' });
+      }
+    });
+
+    // Organizer reopens a closed round
+    socket.on('organizer:reopenRound', async (data) => {
+      const { roundId } = data;
+
+      try {
+        const round = await dbHelpers.get('SELECT quiz_id, round_number FROM rounds WHERE id = ?', [roundId]);
+
+        await dbHelpers.run(
+          'UPDATE rounds SET is_closed = 0 WHERE id = ?',
+          [roundId]
+        );
+
+        // Re-send questions to all teams
+        const questions = await dbHelpers.all(
+          `SELECT id, question_text, question_type, image_url, 
+                  option_a, option_b, option_c, option_d 
+           FROM questions WHERE round_id = ?`,
+          [roundId]
+        );
+
+        io.to(`quiz-${round.quiz_id}`).emit('round:started', {
+          roundNumber: round.round_number,
+          questions
+        });
+
+        socket.emit('organizer:roundReopened', { success: true, roundId });
+        console.log(`Round ${roundId} reopened for quiz ${round.quiz_id}`);
+      } catch (error) {
+        console.error('Error reopening round:', error);
+        socket.emit('error', { message: 'Failed to reopen round' });
       }
     });
 
