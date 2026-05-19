@@ -196,14 +196,18 @@ router.get('/quiz/:quizId/round/:roundId/answers', async (req, res) => {
       `SELECT 
         a.id as answer_id,
         a.selected_answer,
+        a.selected_answers_json,
         a.answer_text,
         a.is_correct,
+        a.score,
         a.question_id,
         t.team_name,
         t.id as team_id,
         q.question_text,
         q.question_type,
-        q.correct_answer
+        q.answer_mode,
+        q.correct_answer,
+        q.correct_answers_json
        FROM answers a
        JOIN teams t ON a.team_id = t.id
        JOIN questions q ON a.question_id = q.id
@@ -231,8 +235,8 @@ router.put('/answers/:answerId/grade', async (req, res) => {
 
   try {
     await dbHelpers.run(
-      'UPDATE answers SET is_correct = ? WHERE id = ?',
-      [is_correct ? 1 : 0, answerId]
+      'UPDATE answers SET is_correct = ?, score = ? WHERE id = ?',
+      [is_correct ? 1 : 0, is_correct ? 1 : 0, answerId]
     );
 
     res.json({ message: 'Answer graded successfully' });
@@ -328,7 +332,7 @@ router.get('/quiz/:quizId/leaderboard', async (req, res) => {
       `SELECT 
         t.id,
         t.team_name,
-        COUNT(CASE WHEN a.is_correct = 1 THEN 1 END) as score,
+        COALESCE(SUM(a.score), 0) as score,
         COUNT(a.id) as total_answered
        FROM teams t
        LEFT JOIN answers a ON t.id = a.team_id

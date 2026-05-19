@@ -3,6 +3,28 @@ import { API_URL } from '../config';
 import io from 'socket.io-client';
 import { colors, commonStyles } from '../theme';
 
+function formatSelectedAnswer(answer) {
+  if (answer.question_type === 'open') {
+    return answer.answer_text || '—';
+  }
+  if (answer.selected_answers_json) {
+    try {
+      const selected = JSON.parse(answer.selected_answers_json);
+      if (Array.isArray(selected) && selected.length > 0) {
+        return selected.join(', ');
+      }
+    } catch {
+      // fall back to selected_answer
+    }
+  }
+  return answer.selected_answer || '—';
+}
+
+function formatScore(score) {
+  const numeric = Number(score || 0);
+  return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(2);
+}
+
 function OrganizerDashboard() {
   const [quizzes, setQuizzes] = useState([]);
   const [selectedQuizId, setSelectedQuizId] = useState(null);
@@ -295,14 +317,16 @@ function OrganizerDashboard() {
         teamsMap.set(a.team_name, {});
       }
 
-      const teamAnswer = a.question_type === 'open'
-        ? (a.answer_text || '—')
-        : (a.selected_answer || '—');
+      const teamAnswer = formatSelectedAnswer(a);
       const result = a.is_correct === 1 ? 'Correct'
         : a.is_correct === 0 ? 'Wrong'
         : 'Pending';
 
-      teamsMap.get(a.team_name)[a.question_id] = { answer: teamAnswer, result };
+      teamsMap.get(a.team_name)[a.question_id] = {
+        answer: teamAnswer,
+        result: a.question_type === 'open' ? result : `${result} (${formatScore(a.score)})`,
+        score: Number(a.score || 0),
+      };
     });
 
     const questionIds = [...questionsMap.keys()];
@@ -335,10 +359,10 @@ function OrganizerDashboard() {
         const a = answers[qId];
         cells.push(a ? a.answer : '—');
         cells.push(a ? a.result : 'No answer');
-        if (a && a.result === 'Correct') correctCount++;
+        if (a) correctCount += a.score ?? (a.result === 'Correct' ? 1 : 0);
       });
 
-      cells.push(correctCount);
+      cells.push(formatScore(correctCount));
       return cells.map(val => `"${String(val).replace(/"/g, '""')}"`).join(',');
     });
 
@@ -375,7 +399,7 @@ function OrganizerDashboard() {
 
     const headers = ['Rank', 'Team Name', 'Score', 'Total Answered'];
     const rows = leaderboard.map((team, index) => {
-      return [index + 1, team.team_name, team.score, team.total_answered]
+      return [index + 1, team.team_name, formatScore(team.score), team.total_answered]
         .map(val => `"${String(val).replace(/"/g, '""')}"`).join(',');
     });
 
@@ -625,6 +649,7 @@ function OrganizerDashboard() {
                     byQuestion[a.question_id] = {
                       question_text: a.question_text,
                       question_type: a.question_type,
+                        answer_mode: a.answer_mode,
                       correct_answer: a.correct_answer,
                       answers: []
                     };
@@ -637,7 +662,7 @@ function OrganizerDashboard() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '8px' }}>
                       <strong style={{ fontSize: '16px' }}>{q.question_text}</strong>
                       <span style={q.question_type === 'open' ? commonStyles.badgePurple : commonStyles.badgeOrange}>
-                        {q.question_type === 'open' ? 'Open' : 'MC'}
+                        {q.question_type === 'open' ? 'Open' : q.answer_mode === 'multi' ? 'Multi' : 'MC'}
                       </span>
                     </div>
                     <p style={{ color: colors.success, fontSize: '13px', marginBottom: '12px', fontStyle: 'italic' }}>
@@ -653,8 +678,13 @@ function OrganizerDashboard() {
                           <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1 }}>
                             <span style={{ fontWeight: '700', minWidth: '100px' }}>{a.team_name}</span>
                             <span style={{ color: colors.textMuted }}>
-                              {a.question_type === 'open' ? (a.answer_text || '—') : (a.selected_answer || '—')}
+                              {formatSelectedAnswer(a)}
                             </span>
+                            {a.question_type !== 'open' && (
+                              <span style={{ color: colors.textDim, fontSize: '12px' }}>
+                                Score: {formatScore(a.score)}
+                              </span>
+                            )}
                           </div>
                           {q.question_type === 'open' ? (
                             <div style={{ display: 'flex', gap: '6px' }}>
@@ -729,7 +759,7 @@ function OrganizerDashboard() {
                       <td style={{ ...s.td, fontWeight: '600' }}>{team.team_name}</td>
                       <td style={s.td}>
                         <strong style={{ fontSize: '22px', color: colors.primary }}>
-                          {team.score}
+                          {formatScore(team.score)}
                         </strong>
                       </td>
                       <td style={{ ...s.td, color: colors.textMuted }}>{team.total_answered}</td>

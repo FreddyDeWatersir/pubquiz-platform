@@ -50,9 +50,9 @@ async function initializeQuizData() {
 
     for (const q of round1Questions) {
       await dbHelpers.run(
-        `INSERT INTO questions (round_id, question_text, option_a, option_b, option_c, option_d, correct_answer)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [round1Id, q.text, q.options[0], q.options[1], q.options[2], q.options[3], q.correct]
+        `INSERT INTO questions (round_id, question_text, option_a, option_b, option_c, option_d, options_json, correct_answer)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [round1Id, q.text, q.options[0], q.options[1], q.options[2], q.options[3], JSON.stringify(q.options), q.correct]
       );
     }
     console.log(`Added ${round1Questions.length} questions to Round 1`);
@@ -95,9 +95,9 @@ async function initializeQuizData() {
 
     for (const q of round2Questions) {
       await dbHelpers.run(
-        `INSERT INTO questions (round_id, question_text, option_a, option_b, option_c, option_d, correct_answer)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [round2Id, q.text, q.options[0], q.options[1], q.options[2], q.options[3], q.correct]
+        `INSERT INTO questions (round_id, question_text, option_a, option_b, option_c, option_d, options_json, correct_answer)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [round2Id, q.text, q.options[0], q.options[1], q.options[2], q.options[3], JSON.stringify(q.options), q.correct]
       );
     }
     console.log(`Added ${round2Questions.length} questions to Round 2`);
@@ -140,9 +140,9 @@ async function initializeQuizData() {
 
     for (const q of round3Questions) {
       await dbHelpers.run(
-        `INSERT INTO questions (round_id, question_text, option_a, option_b, option_c, option_d, correct_answer)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [round3Id, q.text, q.options[0], q.options[1], q.options[2], q.options[3], q.correct]
+        `INSERT INTO questions (round_id, question_text, option_a, option_b, option_c, option_d, options_json, correct_answer)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [round3Id, q.text, q.options[0], q.options[1], q.options[2], q.options[3], JSON.stringify(q.options), q.correct]
       );
     }
     console.log(`Added ${round3Questions.length} questions to Round 3`);

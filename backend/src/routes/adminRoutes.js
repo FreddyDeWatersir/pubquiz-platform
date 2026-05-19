@@ -1,6 +1,23 @@
 const express = require('express');
 const router = express.Router();
 const { dbHelpers } = require('../database');
+const {
+  normalizeOptionsInput,
+  normalizeCorrectAnswersInput,
+  mirrorLegacyColumns,
+  validateCorrectAnswers,
+  parseOptionsFromRow,
+  parseCorrectAnswersFromRow,
+} = require('../utils/questionOptions');
+
+function enrichQuestionRow(row) {
+  return {
+    ...row,
+    options: parseOptionsFromRow(row),
+    correct_answers: parseCorrectAnswersFromRow(row),
+    answer_mode: row.answer_mode || 'single',
+  };
+}
 
 // ==========================================
 // GET ALL QUESTIONS (optionally filtered by quiz)
@@ -27,12 +44,53 @@ router.get('/questions', async (req, res) => {
     sql += ' ORDER BY r.quiz_id, r.round_number, q.id';
 
     const questions = await dbHelpers.all(sql, params);
-    res.json(questions);
+    res.json(questions.map(enrichQuestionRow));
   } catch (error) {
     console.error('Error fetching questions:', error);
     res.status(500).json({ error: 'Failed to fetch questions' });
   }
 });
+
+function prepareMultipleChoiceFields(body) {
+  const {
+    options,
+    option_a,
+    option_b,
+    option_c,
+    option_d,
+    correct_answer,
+    correct_answers,
+    answer_mode,
+  } = body;
+
+  const normalized = normalizeOptionsInput(options, {
+    option_a,
+    option_b,
+    option_c,
+    option_d,
+  });
+
+  if (normalized.error) {
+    return { error: normalized.error };
+  }
+
+  const mode = answer_mode === 'multi' ? 'multi' : 'single';
+  const normalizedCorrectAnswers = normalizeCorrectAnswersInput(correct_answers, correct_answer);
+  const answerError = validateCorrectAnswers(normalizedCorrectAnswers, normalized.options, mode);
+  if (answerError) {
+    return { error: answerError.error };
+  }
+
+  const legacy = mirrorLegacyColumns(normalized.options);
+
+  return {
+    optionsJson: normalized.optionsJson,
+    ...legacy,
+    answerMode: mode,
+    correctAnswersJson: JSON.stringify(normalizedCorrectAnswers),
+    correct_answer: normalizedCorrectAnswers.join(','),
+  };
+}
 
 // ==========================================
 // CREATE NEW QUESTION
@@ -47,32 +105,64 @@ router.post('/questions', async (req, res) => {
     option_b,
     option_c,
     option_d,
-    correct_answer
+    options,
+    correct_answer,
+    correct_answers,
+    answer_mode
   } = req.body;
 
   const type = question_type || 'multiple_choice';
 
-  if (!round_id || !question_text || !correct_answer) {
+  if (!round_id || !question_text || (type === 'open' && !correct_answer)) {
     return res.status(400).json({ error: 'Round, question text, and correct answer are required' });
   }
 
-  // Multiple choice requires all options
+  let mcFields = {
+    optionsJson: null,
+    answerMode: 'single',
+    correctAnswersJson: null,
+    option_a: null,
+    option_b: null,
+    option_c: null,
+    option_d: null,
+  };
+
   if (type === 'multiple_choice') {
-    if (!option_a || !option_b || !option_c || !option_d) {
-      return res.status(400).json({ error: 'All four options are required for multiple choice questions' });
+    const prepared = prepareMultipleChoiceFields({
+      options,
+      option_a,
+      option_b,
+      option_c,
+      option_d,
+      correct_answer,
+      correct_answers,
+      answer_mode,
+    });
+    if (prepared.error) {
+      return res.status(400).json({ error: prepared.error });
     }
-    if (!['A', 'B', 'C', 'D'].includes(correct_answer)) {
-      return res.status(400).json({ error: 'Correct answer must be A, B, C, or D' });
-    }
+    mcFields = prepared;
   }
 
   try {
     const result = await dbHelpers.run(
       `INSERT INTO questions 
-       (round_id, question_text, question_type, image_url, option_a, option_b, option_c, option_d, correct_answer)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [round_id, question_text, type, image_url || null, 
-       option_a || null, option_b || null, option_c || null, option_d || null, correct_answer]
+       (round_id, question_text, question_type, image_url, option_a, option_b, option_c, option_d, options_json, answer_mode, correct_answers_json, correct_answer)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        round_id,
+        question_text,
+        type,
+        image_url || null,
+        mcFields.option_a,
+        mcFields.option_b,
+        mcFields.option_c,
+        mcFields.option_d,
+        mcFields.optionsJson,
+        mcFields.answerMode,
+        mcFields.correctAnswersJson,
+        type === 'multiple_choice' ? mcFields.correct_answer : correct_answer,
+      ]
     );
 
     res.status(201).json({
@@ -99,32 +189,67 @@ router.put('/questions/:id', async (req, res) => {
     option_b,
     option_c,
     option_d,
-    correct_answer
+    options,
+    correct_answer,
+    correct_answers,
+    answer_mode
   } = req.body;
 
   const type = question_type || 'multiple_choice';
 
-  if (!round_id || !question_text || !correct_answer) {
+  if (!round_id || !question_text || (type === 'open' && !correct_answer)) {
     return res.status(400).json({ error: 'Round, question text, and correct answer are required' });
   }
 
+  let mcFields = {
+    optionsJson: null,
+    answerMode: 'single',
+    correctAnswersJson: null,
+    option_a: null,
+    option_b: null,
+    option_c: null,
+    option_d: null,
+  };
+
   if (type === 'multiple_choice') {
-    if (!option_a || !option_b || !option_c || !option_d) {
-      return res.status(400).json({ error: 'All four options are required for multiple choice questions' });
+    const prepared = prepareMultipleChoiceFields({
+      options,
+      option_a,
+      option_b,
+      option_c,
+      option_d,
+      correct_answer,
+      correct_answers,
+      answer_mode,
+    });
+    if (prepared.error) {
+      return res.status(400).json({ error: prepared.error });
     }
-    if (!['A', 'B', 'C', 'D'].includes(correct_answer)) {
-      return res.status(400).json({ error: 'Correct answer must be A, B, C, or D' });
-    }
+    mcFields = prepared;
   }
 
   try {
     await dbHelpers.run(
       `UPDATE questions 
        SET round_id = ?, question_text = ?, question_type = ?, image_url = ?,
-           option_a = ?, option_b = ?, option_c = ?, option_d = ?, correct_answer = ?
+           option_a = ?, option_b = ?, option_c = ?, option_d = ?, options_json = ?,
+           answer_mode = ?, correct_answers_json = ?, correct_answer = ?
        WHERE id = ?`,
-      [round_id, question_text, type, image_url || null,
-       option_a || null, option_b || null, option_c || null, option_d || null, correct_answer, id]
+      [
+        round_id,
+        question_text,
+        type,
+        image_url || null,
+        mcFields.option_a,
+        mcFields.option_b,
+        mcFields.option_c,
+        mcFields.option_d,
+        mcFields.optionsJson,
+        mcFields.answerMode,
+        mcFields.correctAnswersJson,
+        type === 'multiple_choice' ? mcFields.correct_answer : correct_answer,
+        id,
+      ]
     );
 
     res.json({ message: 'Question updated successfully' });
