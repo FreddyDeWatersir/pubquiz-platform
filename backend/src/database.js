@@ -79,10 +79,29 @@ if (USE_MYSQL) {
           option_b VARCHAR(500),
           option_c VARCHAR(500),
           option_d VARCHAR(500),
+          options_json TEXT,
+          answer_mode VARCHAR(20) DEFAULT 'single',
+          correct_answers_json TEXT,
           correct_answer VARCHAR(500) NOT NULL,
           FOREIGN KEY (round_id) REFERENCES rounds(id)
         )
       `);
+
+      // Migration: add options_json if table existed without it
+      const questionMigrations = [
+        ['options_json', `ALTER TABLE questions ADD COLUMN options_json TEXT`],
+        ['answer_mode', `ALTER TABLE questions ADD COLUMN answer_mode VARCHAR(20) DEFAULT 'single'`],
+        ['correct_answers_json', `ALTER TABLE questions ADD COLUMN correct_answers_json TEXT`],
+      ];
+      for (const [name, sql] of questionMigrations) {
+        try {
+          await conn.query(sql);
+        } catch (err) {
+          if (err.code !== 'ER_DUP_FIELDNAME') {
+            console.error(`MySQL migration error (${name}):`, err.message);
+          }
+        }
+      }
 
       await conn.query(`
         CREATE TABLE IF NOT EXISTS teams (
@@ -101,13 +120,35 @@ if (USE_MYSQL) {
           team_id INT NOT NULL,
           question_id INT NOT NULL,
           selected_answer VARCHAR(10),
+          selected_answers_json TEXT,
           answer_text TEXT,
           is_correct TINYINT(1) DEFAULT NULL,
+          score FLOAT DEFAULT 0,
           submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (team_id) REFERENCES teams(id),
           FOREIGN KEY (question_id) REFERENCES questions(id),
           UNIQUE KEY unique_team_question (team_id, question_id)
         )
+      `);
+
+      const answerMigrations = [
+        ['selected_answers_json', `ALTER TABLE answers ADD COLUMN selected_answers_json TEXT`],
+        ['score', `ALTER TABLE answers ADD COLUMN score FLOAT DEFAULT 0`],
+      ];
+      for (const [name, sql] of answerMigrations) {
+        try {
+          await conn.query(sql);
+        } catch (err) {
+          if (err.code !== 'ER_DUP_FIELDNAME') {
+            console.error(`MySQL migration error (${name}):`, err.message);
+          }
+        }
+      }
+
+      await conn.query(`
+        UPDATE answers
+        SET score = 1
+        WHERE is_correct = 1 AND (score IS NULL OR score = 0)
       `);
 
       console.log('MySQL schema initialized');
@@ -209,10 +250,24 @@ if (USE_MYSQL) {
           option_b TEXT,
           option_c TEXT,
           option_d TEXT,
+          options_json TEXT,
+          answer_mode TEXT DEFAULT 'single',
+          correct_answers_json TEXT,
           correct_answer TEXT NOT NULL,
           FOREIGN KEY (round_id) REFERENCES rounds(id)
         )
       `);
+
+      const migrateQuestionColumn = (name, sql) => {
+        db.run(sql, (err) => {
+          if (err && !err.message.includes('duplicate column')) {
+            console.error(`Migration error (${name}):`, err);
+          }
+        });
+      };
+      migrateQuestionColumn('options_json', `ALTER TABLE questions ADD COLUMN options_json TEXT`);
+      migrateQuestionColumn('answer_mode', `ALTER TABLE questions ADD COLUMN answer_mode TEXT DEFAULT 'single'`);
+      migrateQuestionColumn('correct_answers_json', `ALTER TABLE questions ADD COLUMN correct_answers_json TEXT`);
 
       db.run(`
         CREATE TABLE IF NOT EXISTS teams (
@@ -231,8 +286,10 @@ if (USE_MYSQL) {
           team_id INTEGER NOT NULL,
           question_id INTEGER NOT NULL,
           selected_answer TEXT,
+          selected_answers_json TEXT,
           answer_text TEXT,
           is_correct INTEGER DEFAULT NULL,
+          score REAL DEFAULT 0,
           submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (team_id) REFERENCES teams(id),
           FOREIGN KEY (question_id) REFERENCES questions(id),
@@ -248,6 +305,21 @@ if (USE_MYSQL) {
           resolve();
         }
       });
+
+      const migrateAnswerColumn = (name, sql) => {
+        db.run(sql, (err) => {
+          if (err && !err.message.includes('duplicate column')) {
+            console.error(`Migration error (${name}):`, err);
+          }
+        });
+      };
+      migrateAnswerColumn('selected_answers_json', `ALTER TABLE answers ADD COLUMN selected_answers_json TEXT`);
+      migrateAnswerColumn('score', `ALTER TABLE answers ADD COLUMN score REAL DEFAULT 0`);
+      db.run(`
+        UPDATE answers
+        SET score = 1
+        WHERE is_correct = 1 AND (score IS NULL OR score = 0)
+      `);
     });
   }
 

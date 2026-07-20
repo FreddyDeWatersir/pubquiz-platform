@@ -1,4 +1,9 @@
 const { dbHelpers } = require('../database');
+const {
+  formatQuestionsForClient,
+  parseCorrectAnswersFromRow,
+  scoreSelectedAnswers,
+} = require('../utils/questionOptions');
 
 function setupSocketHandlers(io) {
   io.on('connection', (socket) => {
@@ -36,16 +41,16 @@ function setupSocketHandlers(io) {
           if (currentRound) {
             // Only send questions if round is not closed
             if (!currentRound.is_closed) {
-              const questions = await dbHelpers.all(
-                `SELECT id, question_text, question_type, image_url, 
-                        option_a, option_b, option_c, option_d 
+              const questionRows = await dbHelpers.all(
+                `SELECT id, question_text, question_type, image_url,
+                        option_a, option_b, option_c, option_d, options_json, answer_mode
                  FROM questions WHERE round_id = ?`,
                 [currentRound.id]
               );
 
               socket.emit('round:started', {
                 roundNumber: currentRound.round_number,
-                questions
+                questions: formatQuestionsForClient(questionRows),
               });
             }
             // If round is closed, team stays on waiting screen
@@ -71,7 +76,7 @@ function setupSocketHandlers(io) {
 
     // Team submits answers
     socket.on('team:submit', async (data) => {
-      const { answers } = data; // Array of { questionId, selectedAnswer, answerText }
+      const { answers } = data; // Array of { questionId, selectedAnswer, selectedAnswers, answerText }
       
       try {
         // Check if the round is closed before accepting answers
@@ -91,7 +96,7 @@ function setupSocketHandlers(io) {
 
         for (const answer of answers) {
           const question = await dbHelpers.get(
-            'SELECT correct_answer, question_type FROM questions WHERE id = ?',
+            'SELECT correct_answer, correct_answers_json, question_type, answer_mode FROM questions WHERE id = ?',
             [answer.questionId]
           );
 
@@ -103,12 +108,26 @@ function setupSocketHandlers(io) {
               [socket.teamId, answer.questionId, answer.answerText || '']
             );
           } else {
-            // Multiple choice: auto-grade
-            const isCorrect = question.correct_answer === answer.selectedAnswer ? 1 : 0;
+            const selectedAnswers = question.answer_mode === 'multi'
+              ? (Array.isArray(answer.selectedAnswers) ? answer.selectedAnswers : [])
+              : [answer.selectedAnswer];
+            const correctAnswers = parseCorrectAnswersFromRow(question);
+            const { score, isCorrect } = scoreSelectedAnswers(
+              selectedAnswers,
+              correctAnswers,
+              question.answer_mode || 'single'
+            );
             await dbHelpers.run(
-              `REPLACE INTO answers (team_id, question_id, selected_answer, is_correct)
-               VALUES (?, ?, ?, ?)`,
-              [socket.teamId, answer.questionId, answer.selectedAnswer, isCorrect]
+              `REPLACE INTO answers (team_id, question_id, selected_answer, selected_answers_json, is_correct, score)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+              [
+                socket.teamId,
+                answer.questionId,
+                selectedAnswers[0] || null,
+                JSON.stringify(selectedAnswers),
+                isCorrect,
+                score,
+              ]
             );
           }
         }
@@ -148,9 +167,9 @@ function setupSocketHandlers(io) {
         );
 
         // Get questions for this round (WITHOUT correct answers)
-        const questions = await dbHelpers.all(
-          `SELECT id, question_text, question_type, image_url, 
-                  option_a, option_b, option_c, option_d 
+        const questionRows = await dbHelpers.all(
+          `SELECT id, question_text, question_type, image_url,
+                  option_a, option_b, option_c, option_d, options_json, answer_mode
            FROM questions WHERE round_id = ?`,
           [roundId]
         );
@@ -158,7 +177,7 @@ function setupSocketHandlers(io) {
         // Broadcast to all teams in this quiz
         io.to(`quiz-${round.quiz_id}`).emit('round:started', {
           roundNumber: round.round_number,
-          questions
+          questions: formatQuestionsForClient(questionRows),
         });
 
         socket.emit('organizer:roundActivated', { success: true, roundId });
@@ -208,16 +227,16 @@ function setupSocketHandlers(io) {
         );
 
         // Re-send questions to all teams
-        const questions = await dbHelpers.all(
-          `SELECT id, question_text, question_type, image_url, 
-                  option_a, option_b, option_c, option_d 
+        const questionRows = await dbHelpers.all(
+          `SELECT id, question_text, question_type, image_url,
+                  option_a, option_b, option_c, option_d, options_json, answer_mode
            FROM questions WHERE round_id = ?`,
           [roundId]
         );
 
         io.to(`quiz-${round.quiz_id}`).emit('round:started', {
           roundNumber: round.round_number,
-          questions
+          questions: formatQuestionsForClient(questionRows),
         });
 
         socket.emit('organizer:roundReopened', { success: true, roundId });

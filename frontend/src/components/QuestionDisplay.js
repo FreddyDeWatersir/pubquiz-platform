@@ -1,6 +1,21 @@
 import React, { useState } from 'react';
 import { colors, commonStyles } from '../theme';
 
+function getQuestionOptions(question) {
+  if (question.options && question.options.length > 0) {
+    return question.options.map((o) =>
+      typeof o === 'string' ? { label: '', text: o } : o
+    );
+  }
+  return ['a', 'b', 'c', 'd']
+    .map((letter, i) => {
+      const text = question[`option_${letter}`];
+      if (!text || !String(text).trim()) return null;
+      return { label: String.fromCharCode(65 + i), text: String(text).trim() };
+    })
+    .filter(Boolean);
+}
+
 function QuestionDisplay({ questions, onSubmit, teamName }) {
   const [answers, setAnswers] = useState({});
   const [textAnswers, setTextAnswers] = useState({});
@@ -8,6 +23,14 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
 
   const handleAnswerChange = (questionId, answer) => {
     setAnswers({ ...answers, [questionId]: answer });
+  };
+
+  const handleMultiAnswerChange = (questionId, answer) => {
+    const current = Array.isArray(answers[questionId]) ? answers[questionId] : [];
+    const next = current.includes(answer)
+      ? current.filter((item) => item !== answer)
+      : [...current, answer];
+    setAnswers({ ...answers, [questionId]: next });
   };
 
   const handleTextChange = (questionId, text) => {
@@ -18,6 +41,9 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
     const allAnswered = questions.every(q => {
       if (q.question_type === 'open') {
         return textAnswers[q.id] && textAnswers[q.id].trim();
+      }
+      if (q.answer_mode === 'multi') {
+        return Array.isArray(answers[q.id]) && answers[q.id].length > 0;
       }
       return answers[q.id];
     });
@@ -32,6 +58,9 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
       if (q.question_type === 'open') {
         return { questionId: q.id, answerText: textAnswers[q.id] };
       }
+      if (q.answer_mode === 'multi') {
+        return { questionId: q.id, selectedAnswers: answers[q.id] || [] };
+      }
       return { questionId: q.id, selectedAnswer: answers[q.id] };
     });
     onSubmit(answersArray);
@@ -40,6 +69,9 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
   // Count answered questions for progress indicator
   const answeredCount = questions.filter(q => {
     if (q.question_type === 'open') return textAnswers[q.id] && textAnswers[q.id].trim();
+    if (q.answer_mode === 'multi') {
+      return Array.isArray(answers[q.id]) && answers[q.id].length > 0;
+    }
     return answers[q.id];
   }).length;
 
@@ -67,7 +99,7 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
             <div style={styles.questionHeader}>
               <span style={styles.questionNumber}>Q{index + 1}</span>
               <span style={question.question_type === 'open' ? styles.typeBadgeOpen : styles.typeBadgeMC}>
-                {question.question_type === 'open' ? 'OPEN' : 'CHOICE'}
+                {question.question_type === 'open' ? 'OPEN' : question.answer_mode === 'multi' ? 'MULTI' : 'CHOICE'}
               </span>
             </div>
 
@@ -95,13 +127,15 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
               />
             ) : (
               <div style={styles.optionsContainer}>
-                {['A', 'B', 'C', 'D'].map((option) => {
-                  const optionText = question[`option_${option.toLowerCase()}`];
-                  if (!optionText) return null;
-                  const isSelected = answers[question.id] === option;
+                {getQuestionOptions(question).map((opt) => {
+                  const isMulti = question.answer_mode === 'multi';
+                  const selectedValues = Array.isArray(answers[question.id]) ? answers[question.id] : [];
+                  const isSelected = isMulti
+                    ? selectedValues.includes(opt.label)
+                    : answers[question.id] === opt.label;
                   return (
                     <label
-                      key={option}
+                      key={opt.label}
                       style={{
                         ...styles.optionLabel,
                         ...(isSelected ? styles.optionSelected : {}),
@@ -111,18 +145,20 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
                         ...styles.optionLetter,
                         ...(isSelected ? styles.optionLetterSelected : {}),
                       }}>
-                        {option}
+                        {opt.label}
                       </span>
                       <input
-                        type="radio"
+                        type={isMulti ? 'checkbox' : 'radio'}
                         name={`question-${question.id}`}
-                        value={option}
+                        value={opt.label}
                         checked={isSelected}
-                        onChange={() => handleAnswerChange(question.id, option)}
+                        onChange={() => isMulti
+                          ? handleMultiAnswerChange(question.id, opt.label)
+                          : handleAnswerChange(question.id, opt.label)}
                         style={{ display: 'none' }}
                         disabled={submitting}
                       />
-                      <span style={styles.optionText}>{optionText}</span>
+                      <span style={styles.optionText}>{opt.text}</span>
                     </label>
                   );
                 })}
