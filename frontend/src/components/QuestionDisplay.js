@@ -292,7 +292,7 @@ const styles = {
   },
   optionSelected: {
     backgroundColor: colors.primaryMuted,
-    borderColor: colors.primary,
+    borderColor: `1px solid ${colors.primary}`,
   },
   optionLetter: {
     width: '32px',
