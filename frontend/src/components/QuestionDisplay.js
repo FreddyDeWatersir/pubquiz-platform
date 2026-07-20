@@ -250,6 +250,9 @@ const styles = {
     cursor: 'pointer',
     border: `1px solid ${colors.border}`,
     transition: 'all 0.2s ease',
+    outline: 'none',
+    WebkitTapHighlightColor: 'transparent',
+    userSelect: 'none',
   },
   optionSelected: {
     backgroundColor: colors.primaryMuted,
