@@ -36,6 +36,10 @@ function OrganizerDashboard() {
   const [socket, setSocket] = useState(null);
   const [toast, setToast] = useState(null);
 
+
+  const [copyingRoundId, setCopyingRoundId] = useState(null);
+  const [copyTargetQuizId, setCopyTargetQuizId] = useState('');
+
   // Answer grading
   const [gradingRoundId, setGradingRoundId] = useState(null);
   const [roundAnswers, setRoundAnswers] = useState([]);
@@ -208,6 +212,28 @@ function OrganizerDashboard() {
     } catch (error) {
       console.error('Error deleting round:', error);
     }
+  };
+
+  const copyRound = async (roundId) => {
+    if (!copyTargetQuizId) return;
+    try {
+      const response = await fetch(`${API_URL}/api/organizer/rounds/${roundId}/copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetQuizId: copyTargetQuizId }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showToast(`Copied ${data.questionsCopied} questions to "${data.targetQuizName}" as Round ${data.round.round_number}`);
+        if (String(copyTargetQuizId) === String(selectedQuizId)) fetchRounds(selectedQuizId);
+      } else {
+        showToast(data.error || 'Copy failed');
+      }
+    } catch (error) {
+      showToast('Copy failed');
+    }
+    setCopyingRoundId(null);
+    setCopyTargetQuizId('');
   };
 
   const activateRound = async (roundId) => {
@@ -612,6 +638,37 @@ function OrganizerDashboard() {
                     >
                       {round.is_active === 1 && !round.is_closed ? 'Active' : 'Activate'}
                     </button>
+                    {copyingRoundId === round.id ? (
+                      <>
+                        <select
+                          value={copyTargetQuizId}
+                          onChange={(e) => setCopyTargetQuizId(e.target.value)}
+                          style={s.copySelect}
+                        >
+                          <option value="">Copy to...</option>
+                          {quizzes.map((q) => (
+                            <option key={q.id} value={q.id}>{q.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => copyRound(round.id)}
+                          style={s.purpleBtn}
+                          disabled={!copyTargetQuizId}
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={() => { setCopyingRoundId(null); setCopyTargetQuizId(''); }}
+                          style={s.deleteSmBtn}
+                        >
+                          ✕
+                        </button>
+                      </>
+                    ) : (
+                      <button onClick={() => setCopyingRoundId(round.id)} style={s.purpleBtn}>
+                        📋 Copy
+                      </button>
+                    )}
                     <button onClick={() => deleteRound(round.id)} style={s.deleteSmBtn}>
                       🗑️
                     </button>
@@ -829,6 +886,14 @@ const s = {
   },
   purpleBtn: {
     ...commonStyles.buttonSecondary,
+  },
+  copySelect: {
+    padding: '8px 10px',
+    backgroundColor: colors.bgInput,
+    color: colors.text,
+    border: `1px solid ${colors.border}`,
+    borderRadius: '8px',
+    fontSize: '14px',
   },
   activateBtn: {
     padding: '10px 24px', fontSize: '14px', backgroundColor: colors.bgInput,

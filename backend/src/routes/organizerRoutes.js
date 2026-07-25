@@ -125,6 +125,71 @@ router.delete('/quizzes/:quizId', async (req, res) => {
   }
 });
 
+// Copy a round and all its questions into another quiz
+router.post('/rounds/:roundId/copy', async (req, res) => {
+  const { roundId } = req.params;
+  const { targetQuizId } = req.body;
+
+  if (!targetQuizId) {
+    return res.status(400).json({ error: 'targetQuizId is required' });
+  }
+
+  try {
+    const sourceRound = await dbHelpers.get('SELECT * FROM rounds WHERE id = ?', [roundId]);
+    if (!sourceRound) return res.status(404).json({ error: 'Round not found' });
+
+    const targetQuiz = await dbHelpers.get('SELECT * FROM quizzes WHERE id = ?', [targetQuizId]);
+    if (!targetQuiz) return res.status(404).json({ error: 'Target quiz not found' });
+
+    const questions = await dbHelpers.all(
+      'SELECT * FROM questions WHERE round_id = ? ORDER BY id',
+      [roundId]
+    );
+
+    // New round always lands at the end of the target quiz, inactive.
+    const last = await dbHelpers.get(
+      'SELECT MAX(round_number) as max_round FROM rounds WHERE quiz_id = ?',
+      [targetQuizId]
+    );
+    const newRoundNumber = (last?.max_round || 0) + 1;
+
+    const inserted = await dbHelpers.run(
+      'INSERT INTO rounds (quiz_id, round_number, is_active, is_closed) VALUES (?, ?, 0, 0)',
+      [targetQuizId, newRoundNumber]
+    );
+    const newRoundId = inserted.id;
+
+    for (const q of questions) {
+      await dbHelpers.run(
+        `INSERT INTO questions
+         (round_id, question_text, question_type, image_url, option_a, option_b, option_c, option_d, options_json, answer_mode, correct_answers_json, correct_answer)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          newRoundId, q.question_text, q.question_type, q.image_url,
+          q.option_a, q.option_b, q.option_c, q.option_d,
+          q.options_json, q.answer_mode, q.correct_answers_json, q.correct_answer
+        ]
+      );
+    }
+
+    res.json({
+      success: true,
+      targetQuizName: targetQuiz.name,
+      questionsCopied: questions.length,
+      round: {
+        id: newRoundId,
+        quiz_id: parseInt(targetQuizId),
+        round_number: newRoundNumber,
+        is_active: 0,
+        is_closed: 0
+      }
+    });
+  } catch (error) {
+    console.error('Error copying round:', error);
+    res.status(500).json({ error: 'Failed to copy round' });
+  }
+});
+
 // ==========================================
 // ROUND MANAGEMENT
 // ==========================================
