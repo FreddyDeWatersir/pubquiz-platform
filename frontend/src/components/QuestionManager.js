@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_URL } from '../config';
 import { colors, commonStyles } from '../theme';
+import { isLoggedIn, logout } from '../auth';
 import {
   getOptionsFromQuestion,
   getCorrectAnswersFromQuestion,
@@ -21,9 +22,8 @@ function QuestionManager() {
   
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const isAuthenticated = localStorage.getItem('adminAuth') === 'true';
-    if (!isAuthenticated) navigate('/admin');
+useEffect(() => {
+    if (!isLoggedIn()) navigate('/admin?next=/admin/questions');
   }, [navigate]);
 
   const fetchQuizzes = useCallback(async () => {
@@ -68,8 +68,8 @@ function QuestionManager() {
   const handleEdit = (q) => { setEditingQuestion(q); setShowForm(true); };
   const handleAdd = () => { setEditingQuestion(null); setShowForm(true); };
   const handleCloseForm = () => { setShowForm(false); setEditingQuestion(null); fetchQuestions(); };
-  const handleLogout = () => { localStorage.removeItem('adminAuth'); navigate('/admin'); };
-
+  const handleLogout = () => { logout(); };
+  
   if (loading) {
     return <div style={st.page}><p style={st.loadingText}>Loading questions...</p></div>;
   }
