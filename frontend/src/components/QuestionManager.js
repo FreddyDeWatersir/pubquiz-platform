@@ -65,11 +65,32 @@ useEffect(() => {
     } catch (error) { console.error('Error deleting question:', error); }
   };
 
+  const moveQuestion = async (question, direction) => {
+    const siblings = questions.filter((x) => x.round_id === question.round_id);
+    const index = siblings.findIndex((x) => x.id === question.id);
+    const target = index + direction;
+    if (target < 0 || target >= siblings.length) return;
+
+    const reordered = [...siblings];
+    [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+
+    try {
+      const res = await fetch(`${API_URL}/api/admin/rounds/${question.round_id}/question-order`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questionIds: reordered.map((x) => x.id) }),
+      });
+      if (res.ok) fetchQuestions();
+    } catch (error) {
+      console.error('Error reordering questions:', error);
+    }
+  };
+
   const handleEdit = (q) => { setEditingQuestion(q); setShowForm(true); };
   const handleAdd = () => { setEditingQuestion(null); setShowForm(true); };
   const handleCloseForm = () => { setShowForm(false); setEditingQuestion(null); fetchQuestions(); };
   const handleLogout = () => { logout(); };
-  
+
   if (loading) {
     return <div style={st.page}><p style={st.loadingText}>Loading questions...</p></div>;
   }
@@ -123,6 +144,8 @@ useEffect(() => {
                     <td style={st.td}>{q.question_text}</td>
                     <td style={st.td}>{q.correct_answers?.length ? q.correct_answers.join(', ') : q.correct_answer}</td>
                     <td style={st.td}>
+                      <button onClick={() => moveQuestion(q, -1)} style={st.editBtn}>↑</button>
+                      <button onClick={() => moveQuestion(q, 1)} style={st.editBtn}>↓</button>
                       <button onClick={() => handleEdit(q)} style={st.editBtn}>Edit</button>
                       <button onClick={() => handleDelete(q.id)} style={st.deleteBtn}>Delete</button>
                     </td>

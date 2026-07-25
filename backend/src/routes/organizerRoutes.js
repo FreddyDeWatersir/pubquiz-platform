@@ -142,7 +142,7 @@ router.post('/rounds/:roundId/copy', async (req, res) => {
     if (!targetQuiz) return res.status(404).json({ error: 'Target quiz not found' });
 
     const questions = await dbHelpers.all(
-      'SELECT * FROM questions WHERE round_id = ? ORDER BY id',
+      'SELECT * FROM questions WHERE round_id = ? ORDER BY sort_order, id',
       [roundId]
     );
 

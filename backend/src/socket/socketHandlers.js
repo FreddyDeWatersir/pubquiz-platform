@@ -45,7 +45,7 @@ function setupSocketHandlers(io) {
               const questionRows = await dbHelpers.all(
                 `SELECT id, question_text, question_type, image_url,
                         option_a, option_b, option_c, option_d, options_json, answer_mode
-                 FROM questions WHERE round_id = ?`,
+                 FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
                 [currentRound.id]
               );
 
@@ -176,7 +176,7 @@ function setupSocketHandlers(io) {
         const questionRows = await dbHelpers.all(
           `SELECT id, question_text, question_type, image_url,
                   option_a, option_b, option_c, option_d, options_json, answer_mode
-           FROM questions WHERE round_id = ?`,
+           FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
           [roundId]
         );
 
@@ -238,7 +238,7 @@ function setupSocketHandlers(io) {
         const questionRows = await dbHelpers.all(
           `SELECT id, question_text, question_type, image_url,
                   option_a, option_b, option_c, option_d, options_json, answer_mode
-           FROM questions WHERE round_id = ?`,
+           FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
           [roundId]
         );
 

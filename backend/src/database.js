@@ -92,6 +92,7 @@ if (USE_MYSQL) {
         ['options_json', `ALTER TABLE questions ADD COLUMN options_json TEXT`],
         ['answer_mode', `ALTER TABLE questions ADD COLUMN answer_mode VARCHAR(20) DEFAULT 'single'`],
         ['correct_answers_json', `ALTER TABLE questions ADD COLUMN correct_answers_json TEXT`],
+        ['sort_order', `ALTER TABLE questions ADD COLUMN sort_order INT DEFAULT 0`],
       ];
       for (const [name, sql] of questionMigrations) {
         try {
@@ -268,7 +269,8 @@ if (USE_MYSQL) {
       migrateQuestionColumn('options_json', `ALTER TABLE questions ADD COLUMN options_json TEXT`);
       migrateQuestionColumn('answer_mode', `ALTER TABLE questions ADD COLUMN answer_mode TEXT DEFAULT 'single'`);
       migrateQuestionColumn('correct_answers_json', `ALTER TABLE questions ADD COLUMN correct_answers_json TEXT`);
-
+      migrateQuestionColumn('sort_order', `ALTER TABLE questions ADD COLUMN sort_order INTEGER DEFAULT 0`);
+      
       db.run(`
         CREATE TABLE IF NOT EXISTS teams (
           id INTEGER PRIMARY KEY AUTOINCREMENT,

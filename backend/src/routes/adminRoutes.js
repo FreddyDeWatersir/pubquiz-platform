@@ -41,7 +41,7 @@ router.get('/questions', async (req, res) => {
       params.push(quiz_id);
     }
 
-    sql += ' ORDER BY r.quiz_id, r.round_number, q.id';
+    sql += ' ORDER BY r.quiz_id, r.round_number, q.sort_order, q.id';
 
     const questions = await dbHelpers.all(sql, params);
     res.json(questions.map(enrichQuestionRow));
@@ -256,6 +256,29 @@ router.put('/questions/:id', async (req, res) => {
   } catch (error) {
     console.error('Error updating question:', error);
     res.status(500).json({ error: 'Failed to update question' });
+  }
+});
+
+// PUT /api/admin/rounds/:roundId/question-order  { questionIds: [...] }
+router.put('/rounds/:roundId/question-order', async (req, res) => {
+  const { roundId } = req.params;
+  const { questionIds } = req.body;
+
+  if (!Array.isArray(questionIds) || questionIds.length === 0) {
+    return res.status(400).json({ error: 'questionIds array is required' });
+  }
+
+  try {
+    for (let i = 0; i < questionIds.length; i++) {
+      await dbHelpers.run(
+        'UPDATE questions SET sort_order = ? WHERE id = ? AND round_id = ?',
+        [i + 1, questionIds[i], roundId]
+      );
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error reordering questions:', error);
+    res.status(500).json({ error: 'Failed to reorder questions' });
   }
 });
 
