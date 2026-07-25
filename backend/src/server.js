@@ -10,6 +10,8 @@ const teamRoutes = require('./routes/teamRoutes');
 const organizerRoutes = require('./routes/organizerRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const { setupSocketHandlers } = require('./socket/socketHandlers');
+const authRoutes = require('./routes/authRoutes');
+const { requireAuth } = require('./auth');
 
 const app = express();
 const server = http.createServer(app);
@@ -74,6 +76,7 @@ app.post('/api/upload', upload.single('image'), (req, res) => {
 });
 
 app.use('/api/teams', teamRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/organizer', organizerRoutes);
 app.use('/api/admin', adminRoutes);
 // Health check endpoint

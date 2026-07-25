@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
+import { installAuthInterceptor } from './auth';
+
+installAuthInterceptor();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_URL } from './config';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { isLoggedIn } from './auth';
 import TeamJoin from './components/TeamJoin';
 import OrganizerDashboard from './components/OrganizerDashboard';
 import QuestionDisplay from './components/QuestionDisplay';
@@ -10,14 +11,20 @@ import AdminLogin from './components/AdminLogin';
 import QuestionManager from './components/QuestionManager';
 import { colors, commonStyles } from './theme';
 
+
+function RequireAuth({ children, next }) {
+  return isLoggedIn() ? children : <Navigate to={`/admin?next=${next}`} replace />;
+}
+
+
 function App() {
   return (
     <Router>
       <Routes>
         <Route path="/" element={<TeamPage />} />
-        <Route path="/organizer" element={<OrganizerDashboard />} />
+        <Route path="/organizer" element={<RequireAuth next="/organizer"><OrganizerDashboard /></RequireAuth>} />
         <Route path="/admin" element={<AdminLogin />} />
-        <Route path="/admin/questions" element={<QuestionManager />} />
+        <Route path="/admin/questions" element={<RequireAuth next="/admin/questions"><QuestionManager /></RequireAuth>} />
       </Routes>
     </Router>
   );

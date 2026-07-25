@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { API_URL } from '../config';
 import io from 'socket.io-client';
 import { colors, commonStyles } from '../theme';
+import { getToken } from '../auth';
 
 function formatSelectedAnswer(answer) {
   if (answer.question_type === 'open') {
@@ -61,7 +62,7 @@ function OrganizerDashboard() {
     const newSocket = io(API_URL);
     setSocket(newSocket);
 
-    newSocket.emit('organizer:join', { quizId: selectedQuizId });
+    newSocket.emit('organizer:join', { quizId: selectedQuizId, token: getToken() });
 
     newSocket.on('organizer:joined', (data) => {
       console.log('Organizer connected:', data);

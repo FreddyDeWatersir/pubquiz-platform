@@ -1,3 +1,4 @@
+const { verifyToken } = require('../auth');
 const { dbHelpers } = require('../database');
 const {
   formatQuestionsForClient,
@@ -66,6 +67,10 @@ function setupSocketHandlers(io) {
 
     // Organizer joins
     socket.on('organizer:join', async (data) => {
+      if (!verifyToken(data && data.token)) {
+      return socket.emit('error', { message: 'Unauthorized' });
+      }
+      socket.isOrganizer = true;
       const { quizId } = data;
       socket.join(`organizer-${quizId}`);
       socket.quizId = quizId;
@@ -149,6 +154,7 @@ function setupSocketHandlers(io) {
 
     // Organizer activates a round
     socket.on('organizer:activateRound', async (data) => {
+      if (!socket.isOrganizer) return socket.emit('error', { message: 'Unauthorized' });
       const { roundId } = data;
       
       try {
@@ -191,6 +197,7 @@ function setupSocketHandlers(io) {
 
     // Organizer closes a round (no more submissions)
     socket.on('organizer:closeRound', async (data) => {
+      if (!socket.isOrganizer) return socket.emit('error', { message: 'Unauthorized' });
       const { roundId } = data;
 
       try {
@@ -216,6 +223,7 @@ function setupSocketHandlers(io) {
 
     // Organizer reopens a closed round
     socket.on('organizer:reopenRound', async (data) => {
+      if (!socket.isOrganizer) return socket.emit('error', { message: 'Unauthorized' });
       const { roundId } = data;
 
       try {
