@@ -77,8 +77,8 @@ app.post('/api/upload', upload.single('image'), (req, res) => {
 
 app.use('/api/teams', teamRoutes);
 app.use('/api/auth', authRoutes);
-app.use('/api/organizer', organizerRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/organizer', requireAuth, organizerRoutes);
+app.use('/api/admin', requireAuth, adminRoutes);
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'PubQuiz server is running' });
