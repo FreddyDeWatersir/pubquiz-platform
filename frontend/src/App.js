@@ -76,8 +76,17 @@ function TeamPage() {
 
     setSocket(newSocket);
     setConnectionStatus('connecting');
-    newSocket.emit('team:join', { sessionToken });
 
+    // 'connect' fires on the initial connection AND on every reconnection
+    // in socket.io-client v4 (unlike v2, there is no separate 'reconnect'
+    // event on the Socket itself — only on the Manager, at newSocket.io).
+    // Re-joining here covers both cases with one handler. Status flips to
+    // 'connected' only once the server confirms via 'team:joined', not here
+    // — a stale/invalid session token would otherwise show "Connected"
+    // even though the server rejected the join.
+    newSocket.on('connect', () => {
+      newSocket.emit('team:join', { sessionToken });
+    });
     newSocket.on('team:joined', (data) => {
       setConnectionStatus('connected');
       if (data && data.teamId) setMyTeamId(data.teamId);
@@ -95,11 +104,11 @@ function TeamPage() {
     newSocket.on('leaderboard:hide', () => setLeaderboardData(null));
     newSocket.on('error', (data) => showToast(`Error: ${data.message}`));
     newSocket.on('disconnect', () => setConnectionStatus('reconnecting'));
-    newSocket.on('reconnect', () => {
-      newSocket.emit('team:join', { sessionToken });
-      setConnectionStatus('connected');
-    });
-    newSocket.on('reconnect_failed', () => {
+    // Same story as 'reconnect' above: reconnection-lifecycle events live on
+    // the Manager (newSocket.io), not the Socket. newSocket.on('reconnect_failed', ...)
+    // would never fire, silently leaving the team stuck on "Reconnecting..."
+    // forever with no way to know retries were exhausted.
+    newSocket.io.on('reconnect_failed', () => {
       setConnectionStatus('failed');
       showToast('Connection lost. Try refreshing.');
     });
