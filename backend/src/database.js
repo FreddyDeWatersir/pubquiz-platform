@@ -62,11 +62,25 @@ if (USE_MYSQL) {
           id INT AUTO_INCREMENT PRIMARY KEY,
           quiz_id INT NOT NULL,
           round_number INT NOT NULL,
+          name VARCHAR(255),
           is_active TINYINT(1) DEFAULT 0,
           is_closed TINYINT(1) DEFAULT 0,
           FOREIGN KEY (quiz_id) REFERENCES quizzes(id)
         )
       `);
+
+      const roundMigrations = [
+        ['name', `ALTER TABLE rounds ADD COLUMN name VARCHAR(255)`],
+      ];
+      for (const [name, sql] of roundMigrations) {
+        try {
+          await conn.query(sql);
+        } catch (err) {
+          if (err.code !== 'ER_DUP_FIELDNAME') {
+            console.error(`MySQL migration error (${name}):`, err.message);
+          }
+        }
+      }
 
       await conn.query(`
         CREATE TABLE IF NOT EXISTS questions (
@@ -93,6 +107,8 @@ if (USE_MYSQL) {
         ['answer_mode', `ALTER TABLE questions ADD COLUMN answer_mode VARCHAR(20) DEFAULT 'single'`],
         ['correct_answers_json', `ALTER TABLE questions ADD COLUMN correct_answers_json TEXT`],
         ['sort_order', `ALTER TABLE questions ADD COLUMN sort_order INT DEFAULT 0`],
+        ['title', `ALTER TABLE questions ADD COLUMN title VARCHAR(255)`],
+        ['image_size', `ALTER TABLE questions ADD COLUMN image_size VARCHAR(20) DEFAULT 'medium'`],
       ];
       for (const [name, sql] of questionMigrations) {
         try {
@@ -227,6 +243,7 @@ if (USE_MYSQL) {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           quiz_id INTEGER NOT NULL,
           round_number INTEGER NOT NULL,
+          name TEXT,
           is_active INTEGER DEFAULT 0,
           is_closed INTEGER DEFAULT 0,
           FOREIGN KEY (quiz_id) REFERENCES quizzes(id)
@@ -235,6 +252,11 @@ if (USE_MYSQL) {
 
       // Migration: add is_closed column if it doesn't exist
       db.run(`ALTER TABLE rounds ADD COLUMN is_closed INTEGER DEFAULT 0`, (err) => {
+        if (err && !err.message.includes('duplicate column')) {
+          console.error('Migration error:', err);
+        }
+      });
+      db.run(`ALTER TABLE rounds ADD COLUMN name TEXT`, (err) => {
         if (err && !err.message.includes('duplicate column')) {
           console.error('Migration error:', err);
         }
@@ -270,6 +292,8 @@ if (USE_MYSQL) {
       migrateQuestionColumn('answer_mode', `ALTER TABLE questions ADD COLUMN answer_mode TEXT DEFAULT 'single'`);
       migrateQuestionColumn('correct_answers_json', `ALTER TABLE questions ADD COLUMN correct_answers_json TEXT`);
       migrateQuestionColumn('sort_order', `ALTER TABLE questions ADD COLUMN sort_order INTEGER DEFAULT 0`);
+      migrateQuestionColumn('title', `ALTER TABLE questions ADD COLUMN title TEXT`);
+      migrateQuestionColumn('image_size', `ALTER TABLE questions ADD COLUMN image_size TEXT DEFAULT 'medium'`);
       
       db.run(`
         CREATE TABLE IF NOT EXISTS teams (

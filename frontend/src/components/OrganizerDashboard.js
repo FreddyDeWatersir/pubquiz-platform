@@ -49,6 +49,17 @@ function OrganizerDashboard() {
   const [newQuizName, setNewQuizName] = useState('');
   const [newQuizCode, setNewQuizCode] = useState('');
 
+  // Quiz editing (rename / change access code)
+  const [editingQuiz, setEditingQuiz] = useState(false);
+  const [editQuizName, setEditQuizName] = useState('');
+  const [editQuizCode, setEditQuizCode] = useState('');
+
+  // Round question list (expandable dropdown) + round renaming
+  const [allQuestions, setAllQuestions] = useState([]);
+  const [expandedRoundIds, setExpandedRoundIds] = useState([]);
+  const [editingRoundId, setEditingRoundId] = useState(null);
+  const [roundNameDraft, setRoundNameDraft] = useState('');
+
   const showToast = (message, duration = 3000) => {
     setToast(message);
     setTimeout(() => setToast(null), duration);
@@ -95,6 +106,7 @@ function OrganizerDashboard() {
     fetchTeams(selectedQuizId);
     fetchRounds(selectedQuizId);
     fetchLeaderboard(selectedQuizId);
+    fetchAllQuestions(selectedQuizId);
 
     return () => {
       newSocket.disconnect();
@@ -140,6 +152,16 @@ function OrganizerDashboard() {
       setLeaderboard(data);
     } catch (error) {
       console.error('Error fetching leaderboard:', error);
+    }
+  };
+
+  const fetchAllQuestions = async (quizId) => {
+    try {
+      const response = await fetch(`${API_URL}/api/admin/questions?quiz_id=${quizId}`);
+      const data = await response.json();
+      setAllQuestions(data);
+    } catch (error) {
+      console.error('Error fetching questions:', error);
     }
   };
 
@@ -212,6 +234,93 @@ function OrganizerDashboard() {
     } catch (error) {
       console.error('Error deleting round:', error);
     }
+  };
+
+  const toggleRoundExpand = (roundId) => {
+    setExpandedRoundIds((prev) =>
+      prev.includes(roundId) ? prev.filter((id) => id !== roundId) : [...prev, roundId]
+    );
+  };
+
+  const startEditRoundName = (round) => {
+    setEditingRoundId(round.id);
+    setRoundNameDraft(round.name || '');
+  };
+
+  const saveRoundName = async (roundId) => {
+    try {
+      const response = await fetch(`${API_URL}/api/organizer/rounds/${roundId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: roundNameDraft }),
+      });
+      if (response.ok) fetchRounds(selectedQuizId);
+    } catch (error) {
+      console.error('Error renaming round:', error);
+    }
+    setEditingRoundId(null);
+    setRoundNameDraft('');
+  };
+
+  const moveRound = async (round, direction) => {
+    const sorted = [...rounds].sort((a, b) => a.round_number - b.round_number);
+    const index = sorted.findIndex((r) => r.id === round.id);
+    const target = index + direction;
+    if (target < 0 || target >= sorted.length) return;
+
+    const reordered = [...sorted];
+    [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+
+    try {
+      const response = await fetch(`${API_URL}/api/organizer/quiz/${selectedQuizId}/round-order`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roundIds: reordered.map((r) => r.id) }),
+      });
+      if (response.ok) fetchRounds(selectedQuizId);
+    } catch (error) {
+      console.error('Error reordering rounds:', error);
+    }
+  };
+
+  const startEditQuiz = () => {
+    const quiz = quizzes.find((q) => q.id === selectedQuizId);
+    setEditQuizName(quiz?.name || '');
+    setEditQuizCode(quiz?.access_code || '');
+    setEditingQuiz(true);
+  };
+
+  const saveQuizEdit = async () => {
+    if (!editQuizName.trim() || !editQuizCode.trim()) {
+      showToast('Please enter both a quiz name and access code');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_URL}/api/organizer/quizzes/${selectedQuizId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: editQuizName.trim(), access_code: editQuizCode.trim() }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showToast('Quiz updated!');
+        setEditingQuiz(false);
+        fetchQuizzes();
+      } else {
+        showToast(data.error || 'Failed to update quiz');
+      }
+    } catch (error) {
+      showToast('Failed to update quiz');
+    }
+  };
+
+  const showLeaderboardToTeams = () => {
+    if (!socket) {
+      showToast('WebSocket not connected!');
+      return;
+    }
+    socket.emit('organizer:showLeaderboard', { quizId: selectedQuizId });
+    showToast('Leaderboard shown to teams! 📣');
   };
 
   const copyRound = async (roundId) => {
@@ -557,12 +666,37 @@ function OrganizerDashboard() {
         <button onClick={() => setSelectedQuizId(null)} style={s.backBtn}>
           ← All Quizzes
         </button>
-        <div>
-          <h1 style={s.title}>{selectedQuiz?.name || 'Quiz'}</h1>
-          <span style={{ color: colors.textMuted, fontSize: '14px' }}>
-            Code: {selectedQuiz?.access_code}
-          </span>
-        </div>
+        {editingQuiz ? (
+          <div style={s.quizEditForm}>
+            <input
+              type="text"
+              value={editQuizName}
+              onChange={(e) => setEditQuizName(e.target.value)}
+              style={{ ...commonStyles.input, width: '220px' }}
+              placeholder="Quiz name"
+            />
+            <input
+              type="text"
+              value={editQuizCode}
+              onChange={(e) => setEditQuizCode(e.target.value.toUpperCase())}
+              style={{ ...commonStyles.input, width: '160px' }}
+              placeholder="Access code"
+              maxLength={20}
+            />
+            <button onClick={saveQuizEdit} style={s.saveBtn}>Save</button>
+            <button onClick={() => setEditingQuiz(false)} style={s.ghostBtn}>Cancel</button>
+          </div>
+        ) : (
+          <div>
+            <h1 style={s.title}>
+              {selectedQuiz?.name || 'Quiz'}
+              <button onClick={startEditQuiz} style={s.editIconBtn} title="Edit name or password">✏️</button>
+            </h1>
+            <span style={{ color: colors.textMuted, fontSize: '14px' }}>
+              Code: {selectedQuiz?.access_code}
+            </span>
+          </div>
+        )}
         <button onClick={resetQuiz} style={s.dangerBtn}>
           🔄 Reset
         </button>
@@ -598,12 +732,42 @@ function OrganizerDashboard() {
             {rounds.length === 0 ? (
               <p style={s.emptyText}>No rounds yet. Add your first round!</p>
             ) : (
-              rounds.map((round) => (
-                <div key={round.id} style={s.roundCard}>
+              [...rounds].sort((a, b) => a.round_number - b.round_number).map((round, roundIndex, sortedRounds) => {
+              const isExpanded = expandedRoundIds.includes(round.id);
+              const roundQuestions = allQuestions
+                .filter((q) => q.round_id === round.id)
+                .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id);
+              return (
+                <div key={round.id} style={s.roundWrap}>
+                <div style={s.roundCard}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <h3 style={{ fontSize: '18px', margin: 0, fontWeight: '700' }}>
-                      Round {round.round_number}
-                    </h3>
+                    <button onClick={() => toggleRoundExpand(round.id)} style={s.expandBtn} title="Show questions">
+                      {isExpanded ? '▼' : '▶'}
+                    </button>
+                    {editingRoundId === round.id ? (
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <input
+                          type="text"
+                          value={roundNameDraft}
+                          onChange={(e) => setRoundNameDraft(e.target.value)}
+                          placeholder={`Round ${round.round_number} name`}
+                          style={{ ...commonStyles.input, width: '200px', padding: '8px 10px' }}
+                          autoFocus
+                          onKeyPress={(e) => e.key === 'Enter' && saveRoundName(round.id)}
+                        />
+                        <button onClick={() => saveRoundName(round.id)} style={s.purpleBtn}>✓</button>
+                        <button onClick={() => setEditingRoundId(null)} style={s.deleteSmBtn}>✕</button>
+                      </div>
+                    ) : (
+                      <h3
+                        style={{ fontSize: '18px', margin: 0, fontWeight: '700', cursor: 'pointer' }}
+                        onClick={() => startEditRoundName(round)}
+                        title="Click to rename this round"
+                      >
+                        Round {round.round_number}{round.name ? ` — ${round.name}` : ''}
+                        <span style={{ fontSize: '13px', marginLeft: '8px', opacity: 0.6 }}>✏️</span>
+                      </h3>
+                    )}
                     <span style={{ color: colors.textMuted, fontSize: '14px' }}>
                       {round.question_count} questions
                     </span>
@@ -615,6 +779,22 @@ function OrganizerDashboard() {
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={() => moveRound(round, -1)}
+                      style={s.deleteSmBtn}
+                      title="Move round up"
+                      disabled={roundIndex === 0}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      onClick={() => moveRound(round, 1)}
+                      style={s.deleteSmBtn}
+                      title="Move round down"
+                      disabled={roundIndex === sortedRounds.length - 1}
+                    >
+                      ↓
+                    </button>
                     <button onClick={() => fetchRoundAnswers(round.id)} style={s.purpleBtn}>
                       📝 Review
                     </button>
@@ -674,7 +854,28 @@ function OrganizerDashboard() {
                     </button>
                   </div>
                 </div>
-              ))
+                {isExpanded && (
+                  <div style={s.roundQuestionList}>
+                    {roundQuestions.length === 0 ? (
+                      <p style={s.emptyText}>No questions in this round yet.</p>
+                    ) : (
+                      roundQuestions.map((q, qi) => (
+                        <div key={q.id} style={s.roundQuestionRow}>
+                          <span style={s.roundQuestionLabel}>
+                            {q.title ? q.title : `Q${qi + 1}`}
+                          </span>
+                          <span style={q.question_type === 'open' ? commonStyles.badgePurple : commonStyles.badgeOrange}>
+                            {q.question_type === 'open' ? 'Open' : q.answer_mode === 'multi' ? 'Multi' : 'MC'}
+                          </span>
+                          {q.image_url && <span title="Has image">📷</span>}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+                </div>
+              );
+              })
             )}
           </div>
         </div>
@@ -788,9 +989,14 @@ function OrganizerDashboard() {
           <div style={s.sectionHeader}>
             <h2 style={s.sectionTitle}>🏆 Leaderboard</h2>
             {leaderboard.length > 0 && (
-              <button onClick={exportLeaderboard} style={s.exportBtn}>
-                📊 Export CSV
-              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={showLeaderboardToTeams} style={s.purpleBtn}>
+                  📣 Show to Teams
+                </button>
+                <button onClick={exportLeaderboard} style={s.exportBtn}>
+                  📊 Export CSV
+                </button>
+              </div>
             )}
           </div>
           <div style={s.tableContainer}>
@@ -961,7 +1167,30 @@ const s = {
   roundCard: {
     backgroundColor: colors.bgCard, padding: '18px 20px', borderRadius: '12px',
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    border: `1px solid ${colors.border}`,
+    border: `1px solid ${colors.border}`, flexWrap: 'wrap', gap: '10px',
+  },
+  roundWrap: { display: 'flex', flexDirection: 'column' },
+  expandBtn: {
+    width: '28px', height: '28px', border: `1px solid ${colors.border}`,
+    borderRadius: '6px', cursor: 'pointer', fontSize: '12px',
+    backgroundColor: 'transparent', color: colors.textMuted,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  roundQuestionList: {
+    backgroundColor: colors.bgInput, borderRadius: '0 0 12px 12px',
+    border: `1px solid ${colors.border}`, borderTop: 'none',
+    padding: '10px 20px', marginTop: '-4px', display: 'flex',
+    flexDirection: 'column', gap: '8px',
+  },
+  roundQuestionRow: {
+    display: 'flex', alignItems: 'center', gap: '12px',
+    padding: '8px 0', borderBottom: `1px solid ${colors.border}`,
+  },
+  roundQuestionLabel: { flex: 1, fontSize: '14px', color: colors.text },
+  quizEditForm: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' },
+  editIconBtn: {
+    marginLeft: '10px', padding: '2px 6px', backgroundColor: 'transparent',
+    border: 'none', cursor: 'pointer', fontSize: '16px', verticalAlign: 'middle',
   },
 
   // Grading

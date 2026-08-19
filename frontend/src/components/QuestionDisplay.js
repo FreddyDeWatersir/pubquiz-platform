@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { colors, commonStyles } from '../theme';
 
+const IMAGE_MAX_HEIGHT = { small: '200px', medium: '350px', large: '500px' };
+
 function getQuestionOptions(question) {
   if (question.options && question.options.length > 0) {
     return question.options.map((o) =>
@@ -16,7 +18,7 @@ function getQuestionOptions(question) {
     .filter(Boolean);
 }
 
-function QuestionDisplay({ questions, onSubmit, teamName }) {
+function QuestionDisplay({ questions, onSubmit, teamName, connected = true }) {
   const [answers, setAnswers] = useState({});
   const [textAnswers, setTextAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -38,6 +40,8 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
   };
 
   const handleSubmit = () => {
+    if (!connected || submitting) return;
+
     const allAnswered = questions.every(q => {
       if (q.question_type === 'open') {
         return textAnswers[q.id] && textAnswers[q.id].trim();
@@ -63,7 +67,11 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
       }
       return { questionId: q.id, selectedAnswer: answers[q.id] };
     });
-    onSubmit(answersArray);
+    // If the submit doesn't succeed (dropped connection, timeout), re-enable
+    // the button instead of leaving it stuck on "Submitting..." forever.
+    onSubmit(answersArray, (result) => {
+      if (!result || !result.success) setSubmitting(false);
+    });
   };
 
   // Count answered questions for progress indicator
@@ -98,23 +106,23 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
           <div key={question.id} style={styles.questionCard}>
             <div style={styles.questionHeader}>
               <span style={styles.questionNumber}>Q{index + 1}</span>
-              <span style={question.question_type === 'open' ? styles.typeBadgeOpen : styles.typeBadgeMC}>
-                {question.question_type === 'open' ? 'OPEN' : question.answer_mode === 'multi' ? 'MULTI' : 'CHOICE'}
-              </span>
             </div>
+
+            <p style={styles.questionText}>{question.question_text}</p>
 
             {question.image_url && (
               <div style={styles.imageContainer}>
                 <img
                   src={question.image_url}
                   alt={`Question ${index + 1}`}
-                  style={styles.questionImage}
+                  style={{
+                    ...styles.questionImage,
+                    maxHeight: IMAGE_MAX_HEIGHT[question.image_size] || IMAGE_MAX_HEIGHT.medium,
+                  }}
                   onError={(e) => { e.target.style.display = 'none'; }}
                 />
               </div>
             )}
-
-            <p style={styles.questionText}>{question.question_text}</p>
 
             {question.question_type === 'open' ? (
               <textarea
@@ -173,11 +181,11 @@ function QuestionDisplay({ questions, onSubmit, teamName }) {
           onClick={handleSubmit}
           style={{
             ...styles.submitButton,
-            ...(answeredCount < questions.length ? styles.submitDisabled : {}),
+            ...(answeredCount < questions.length || !connected ? styles.submitDisabled : {}),
           }}
-          disabled={submitting}
+          disabled={submitting || !connected}
         >
-          {submitting ? 'Submitting...' : 'Submit Answers'}
+          {!connected ? 'Reconnecting…' : submitting ? 'Submitting...' : 'Submit Answers'}
         </button>
       </div>
     </div>
@@ -248,12 +256,6 @@ const styles = {
     fontWeight: '800',
     color: colors.primary,
     letterSpacing: '1px',
-  },
-  typeBadgeMC: {
-    ...commonStyles.badgeOrange,
-  },
-  typeBadgeOpen: {
-    ...commonStyles.badgePurple,
   },
   imageContainer: {
     marginBottom: '16px',

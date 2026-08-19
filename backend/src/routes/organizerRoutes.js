@@ -225,6 +225,46 @@ router.post('/quiz/:quizId/rounds', async (req, res) => {
   }
 });
 
+// Rename a round
+router.put('/rounds/:roundId', async (req, res) => {
+  const { roundId } = req.params;
+  const { name } = req.body;
+
+  try {
+    await dbHelpers.run(
+      'UPDATE rounds SET name = ? WHERE id = ?',
+      [name && name.trim() ? name.trim() : null, roundId]
+    );
+    res.json({ message: 'Round updated successfully' });
+  } catch (error) {
+    console.error('Error updating round:', error);
+    res.status(500).json({ error: 'Failed to update round' });
+  }
+});
+
+// Reorder rounds within a quiz
+router.put('/quiz/:quizId/round-order', async (req, res) => {
+  const { quizId } = req.params;
+  const { roundIds } = req.body;
+
+  if (!Array.isArray(roundIds) || roundIds.length === 0) {
+    return res.status(400).json({ error: 'roundIds array is required' });
+  }
+
+  try {
+    for (let i = 0; i < roundIds.length; i++) {
+      await dbHelpers.run(
+        'UPDATE rounds SET round_number = ? WHERE id = ? AND quiz_id = ?',
+        [i + 1, roundIds[i], quizId]
+      );
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error reordering rounds:', error);
+    res.status(500).json({ error: 'Failed to reorder rounds' });
+  }
+});
+
 // Delete a round
 router.delete('/rounds/:roundId', async (req, res) => {
   const { roundId } = req.params;

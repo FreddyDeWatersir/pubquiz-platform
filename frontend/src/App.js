@@ -45,6 +45,8 @@ function TeamPage() {
   const [socket, setSocket] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const [toast, setToast] = useState(null);
+  const [leaderboardData, setLeaderboardData] = useState(null);
+  const [myTeamId, setMyTeamId] = useState(null);
 
   const showToast = useCallback((message, duration = 3000) => {
     setToast(message);
@@ -76,13 +78,21 @@ function TeamPage() {
     setConnectionStatus('connecting');
     newSocket.emit('team:join', { sessionToken });
 
-    newSocket.on('team:joined', () => setConnectionStatus('connected'));
-    newSocket.on('round:started', (data) => setQuestions(data.questions));
+    newSocket.on('team:joined', (data) => {
+      setConnectionStatus('connected');
+      if (data && data.teamId) setMyTeamId(data.teamId);
+    });
+    newSocket.on('round:started', (data) => {
+      setQuestions(data.questions);
+      setLeaderboardData(null);
+    });
     newSocket.on('round:closed', () => setQuestions(null));
     newSocket.on('team:submitted', () => {
       showToast('Answers submitted! ✓');
       setQuestions(null);
     });
+    newSocket.on('leaderboard:show', (data) => setLeaderboardData(data.leaderboard));
+    newSocket.on('leaderboard:hide', () => setLeaderboardData(null));
     newSocket.on('error', (data) => showToast(`Error: ${data.message}`));
     newSocket.on('disconnect', () => setConnectionStatus('reconnecting'));
     newSocket.on('reconnect', () => {
@@ -101,6 +111,20 @@ function TeamPage() {
     };
   }, [sessionToken, showToast]);
 
+  // Mobile browsers throttle/suspend JS timers while a tab is backgrounded (e.g.
+  // switched away to WhatsApp), which can delay the socket noticing it went stale.
+  // Nudge a reconnect the moment the tab is visible again instead of waiting on it.
+  useEffect(() => {
+    if (!socket) return;
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && !socket.connected) {
+        socket.connect();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [socket]);
+
   const handleJoinSuccess = (token, name) => {
     sessionStorage.setItem('quizSessionToken', token);
     sessionStorage.setItem('quizTeamName', name);
@@ -116,8 +140,36 @@ function TeamPage() {
     setQuestions(null);
   };
 
-  const handleSubmitAnswers = (answers) => {
-    if (socket) socket.emit('team:submit', { answers });
+  // Submits with an ack + timeout so a stale post-backgrounding socket fails
+  // loudly (and lets the button re-enable) instead of silently doing nothing.
+  const handleSubmitAnswers = (answers, onResult) => {
+    const finish = (result) => { if (onResult) onResult(result); };
+
+    if (!socket || !socket.connected) {
+      showToast("Not connected — reconnecting, please try Submit again in a moment.");
+      finish({ success: false });
+      return;
+    }
+
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      showToast("Couldn't reach the server — please tap Submit again.");
+      finish({ success: false });
+    }, 6000);
+
+    socket.emit('team:submit', { answers }, (ack) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (ack && ack.success) {
+        finish({ success: true });
+      } else {
+        showToast("Couldn't submit — please tap Submit again.");
+        finish({ success: false });
+      }
+    });
   };
 
   // State machine render
@@ -131,8 +183,13 @@ function TeamPage() {
         questions={questions}
         onSubmit={handleSubmitAnswers}
         teamName={teamName}
+        connected={connectionStatus === 'connected'}
       />
     );
+  }
+
+  if (leaderboardData) {
+    return <LeaderboardView leaderboard={leaderboardData} myTeamId={myTeamId} />;
   }
 
   // Waiting screen
@@ -172,6 +229,60 @@ function TeamPage() {
   );
 }
 
+function formatScore(score) {
+  const numeric = Number(score || 0);
+  return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(2);
+}
+
+// Shows the top 3 teams first, then — if the viewing team isn't already
+// in the top 3 — a divider and their own highlighted standing below.
+function LeaderboardView({ leaderboard, myTeamId }) {
+  const top3 = leaderboard.slice(0, 3);
+  const myIndex = leaderboard.findIndex((team) => team.id === myTeamId);
+  const myEntry = myIndex >= 0 ? leaderboard[myIndex] : null;
+  const myInTop3 = myIndex >= 0 && myIndex < 3;
+  const medals = ['🥇', '🥈', '🥉'];
+
+  return (
+    <div style={waitStyles.room}>
+      <div style={waitStyles.bgGlow} />
+      <div style={waitStyles.content}>
+        <img src="/logo.png" alt="Quiz Masters of Melody" style={waitStyles.logo} />
+        <h2 style={waitStyles.welcome}>🏆 Leaderboard</h2>
+
+        <div style={leaderboardStyles.list}>
+          {top3.map((team, i) => (
+            <div
+              key={team.id}
+              style={{
+                ...leaderboardStyles.row,
+                ...(team.id === myTeamId ? leaderboardStyles.rowMine : {}),
+              }}
+            >
+              <span style={leaderboardStyles.medal}>{medals[i]}</span>
+              <span style={leaderboardStyles.name}>{team.team_name}</span>
+              <span style={leaderboardStyles.score}>{formatScore(team.score)}</span>
+            </div>
+          ))}
+        </div>
+
+        {myEntry && !myInTop3 && (
+          <>
+            <div style={leaderboardStyles.divider}>· · ·</div>
+            <div style={leaderboardStyles.list}>
+              <div style={{ ...leaderboardStyles.row, ...leaderboardStyles.rowMine }}>
+                <span style={leaderboardStyles.medal}>#{myIndex + 1}</span>
+                <span style={leaderboardStyles.name}>{myEntry.team_name}</span>
+                <span style={leaderboardStyles.score}>{formatScore(myEntry.score)}</span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const waitStyles = {
   room: {
     display: 'flex', flexDirection: 'column', justifyContent: 'center',
@@ -202,6 +313,28 @@ const waitStyles = {
     padding: '10px 24px', backgroundColor: 'transparent',
     color: colors.textMuted, border: `1px solid ${colors.border}`,
     borderRadius: '8px', cursor: 'pointer', fontSize: '14px',
+  },
+};
+
+const leaderboardStyles = {
+  list: {
+    display: 'flex', flexDirection: 'column', gap: '10px',
+    width: '340px', maxWidth: '90vw',
+  },
+  row: {
+    display: 'flex', alignItems: 'center', gap: '14px',
+    padding: '14px 18px', backgroundColor: colors.bgCard,
+    border: `1px solid ${colors.border}`, borderRadius: '12px',
+  },
+  rowMine: {
+    borderColor: colors.primary, backgroundColor: colors.primaryMuted,
+  },
+  medal: { fontSize: '20px', width: '32px', textAlign: 'center', flexShrink: 0 },
+  name: { flex: 1, fontSize: '16px', fontWeight: '700', color: colors.text },
+  score: { fontSize: '18px', fontWeight: '800', color: colors.primary },
+  divider: {
+    color: colors.textDim, fontSize: '20px', letterSpacing: '4px',
+    margin: '18px 0',
   },
 };
 

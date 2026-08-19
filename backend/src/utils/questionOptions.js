@@ -170,6 +170,7 @@ function formatQuestionForClient(row, { includeCorrectAnswer = false } = {}) {
     question_type: row.question_type || 'multiple_choice',
     answer_mode: answerMode,
     image_url: row.image_url,
+    image_size: row.image_size || 'medium',
     option_a: row.option_a,
     option_b: row.option_b,
     option_c: row.option_c,

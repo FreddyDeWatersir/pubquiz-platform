@@ -44,7 +44,7 @@ function setupSocketHandlers(io) {
             if (!currentRound.is_closed) {
               const questionRows = await dbHelpers.all(
                 `SELECT id, question_text, question_type, image_url,
-                        option_a, option_b, option_c, option_d, options_json, answer_mode
+                        option_a, option_b, option_c, option_d, options_json, answer_mode, image_size, image_size
                  FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
                 [currentRound.id]
               );
@@ -80,21 +80,23 @@ function setupSocketHandlers(io) {
     });
 
     // Team submits answers
-    socket.on('team:submit', async (data) => {
+    socket.on('team:submit', async (data, callback) => {
       const { answers } = data; // Array of { questionId, selectedAnswer, selectedAnswers, answerText }
-      
+      const ack = typeof callback === 'function' ? callback : () => {};
+
       try {
         // Check if the round is closed before accepting answers
         if (answers.length > 0) {
           const question = await dbHelpers.get(
-            `SELECT r.is_closed FROM questions q 
-             JOIN rounds r ON q.round_id = r.id 
+            `SELECT r.is_closed FROM questions q
+             JOIN rounds r ON q.round_id = r.id
              WHERE q.id = ?`,
             [answers[0].questionId]
           );
           if (question && question.is_closed) {
             socket.emit('error', { message: 'This round is closed. Answers can no longer be submitted.' });
             socket.emit('round:closed', {});
+            ack({ success: false, error: 'round_closed' });
             return;
           }
         }
@@ -138,7 +140,8 @@ function setupSocketHandlers(io) {
         }
 
         socket.emit('team:submitted', { success: true });
-        
+        ack({ success: true });
+
         // Notify organizer
         const team = await dbHelpers.get('SELECT team_name FROM teams WHERE id = ?', [socket.teamId]);
         io.to(`organizer-${socket.quizId}`).emit('team:answered', {
@@ -149,6 +152,7 @@ function setupSocketHandlers(io) {
       } catch (error) {
         console.error('Error submitting answers:', error);
         socket.emit('error', { message: 'Failed to submit answers' });
+        ack({ success: false, error: 'server_error' });
       }
     });
 
@@ -175,7 +179,7 @@ function setupSocketHandlers(io) {
         // Get questions for this round (WITHOUT correct answers)
         const questionRows = await dbHelpers.all(
           `SELECT id, question_text, question_type, image_url,
-                  option_a, option_b, option_c, option_d, options_json, answer_mode
+                  option_a, option_b, option_c, option_d, options_json, answer_mode, image_size
            FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
           [roundId]
         );
@@ -237,7 +241,7 @@ function setupSocketHandlers(io) {
         // Re-send questions to all teams
         const questionRows = await dbHelpers.all(
           `SELECT id, question_text, question_type, image_url,
-                  option_a, option_b, option_c, option_d, options_json, answer_mode
+                  option_a, option_b, option_c, option_d, options_json, answer_mode, image_size
            FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
           [roundId]
         );
@@ -253,6 +257,43 @@ function setupSocketHandlers(io) {
         console.error('Error reopening round:', error);
         socket.emit('error', { message: 'Failed to reopen round' });
       }
+    });
+
+    // Organizer reveals the leaderboard to all teams
+    socket.on('organizer:showLeaderboard', async (data) => {
+      if (!socket.isOrganizer) return socket.emit('error', { message: 'Unauthorized' });
+      const { quizId } = data;
+
+      try {
+        const leaderboard = await dbHelpers.all(
+          `SELECT
+            t.id,
+            t.team_name,
+            COALESCE(SUM(a.score), 0) as score,
+            COUNT(a.id) as total_answered
+           FROM teams t
+           LEFT JOIN answers a ON t.id = a.team_id
+           WHERE t.quiz_id = ?
+           GROUP BY t.id, t.team_name
+           ORDER BY score DESC, total_answered DESC`,
+          [quizId]
+        );
+
+        io.to(`quiz-${quizId}`).emit('leaderboard:show', { leaderboard });
+        socket.emit('organizer:leaderboardShown', { success: true });
+        console.log(`Leaderboard shown to teams for quiz ${quizId}`);
+      } catch (error) {
+        console.error('Error showing leaderboard:', error);
+        socket.emit('error', { message: 'Failed to show leaderboard' });
+      }
+    });
+
+    // Organizer hides the leaderboard from teams
+    socket.on('organizer:hideLeaderboard', (data) => {
+      if (!socket.isOrganizer) return socket.emit('error', { message: 'Unauthorized' });
+      const { quizId } = data;
+      io.to(`quiz-${quizId}`).emit('leaderboard:hide', {});
+      socket.emit('organizer:leaderboardHidden', { success: true });
     });
 
     socket.on('disconnect', () => {

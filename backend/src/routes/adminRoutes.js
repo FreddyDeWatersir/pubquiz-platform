@@ -96,11 +96,13 @@ function prepareMultipleChoiceFields(body) {
 // CREATE NEW QUESTION
 // ==========================================
 router.post('/questions', async (req, res) => {
-  const { 
+  const {
     round_id,
     question_text,
     question_type,
     image_url,
+    image_size,
+    title,
     option_a,
     option_b,
     option_c,
@@ -146,14 +148,16 @@ router.post('/questions', async (req, res) => {
 
   try {
     const result = await dbHelpers.run(
-      `INSERT INTO questions 
-       (round_id, question_text, question_type, image_url, option_a, option_b, option_c, option_d, options_json, answer_mode, correct_answers_json, correct_answer)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO questions
+       (round_id, question_text, question_type, image_url, image_size, title, option_a, option_b, option_c, option_d, options_json, answer_mode, correct_answers_json, correct_answer)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         round_id,
         question_text,
         type,
         image_url || null,
+        image_size || 'medium',
+        title && title.trim() ? title.trim() : null,
         mcFields.option_a,
         mcFields.option_b,
         mcFields.option_c,
@@ -180,11 +184,13 @@ router.post('/questions', async (req, res) => {
 // ==========================================
 router.put('/questions/:id', async (req, res) => {
   const { id } = req.params;
-  const { 
+  const {
     round_id,
     question_text,
     question_type,
     image_url,
+    image_size,
+    title,
     option_a,
     option_b,
     option_c,
@@ -230,8 +236,8 @@ router.put('/questions/:id', async (req, res) => {
 
   try {
     await dbHelpers.run(
-      `UPDATE questions 
-       SET round_id = ?, question_text = ?, question_type = ?, image_url = ?,
+      `UPDATE questions
+       SET round_id = ?, question_text = ?, question_type = ?, image_url = ?, image_size = ?, title = ?,
            option_a = ?, option_b = ?, option_c = ?, option_d = ?, options_json = ?,
            answer_mode = ?, correct_answers_json = ?, correct_answer = ?
        WHERE id = ?`,
@@ -240,6 +246,8 @@ router.put('/questions/:id', async (req, res) => {
         question_text,
         type,
         image_url || null,
+        image_size || 'medium',
+        title && title.trim() ? title.trim() : null,
         mcFields.option_a,
         mcFields.option_b,
         mcFields.option_c,

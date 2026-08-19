@@ -141,7 +141,16 @@ useEffect(() => {
                       </span>
                       {q.image_url && <span style={{ marginLeft: '6px' }}>📷</span>}
                     </td>
-                    <td style={st.td}>{q.question_text}</td>
+                    <td style={st.td}>
+                      {q.title ? (
+                        <>
+                          <strong>{q.title}</strong>
+                          <div style={{ color: colors.textDim, fontSize: '12px', marginTop: '2px' }}>
+                            {q.question_text.length > 60 ? q.question_text.slice(0, 57) + '...' : q.question_text}
+                          </div>
+                        </>
+                      ) : q.question_text}
+                    </td>
                     <td style={st.td}>{q.correct_answers?.length ? q.correct_answers.join(', ') : q.correct_answer}</td>
                     <td style={st.td}>
                       <button onClick={() => moveQuestion(q, -1)} style={st.editBtn}>↑</button>
@@ -171,8 +180,10 @@ function QuestionForm({ question, rounds, onClose }) {
     round_id: question?.round_id || (rounds[0]?.id || 1),
     question_type: question?.question_type || 'multiple_choice',
     answer_mode: question?.answer_mode || 'single',
+    title: question?.title || '',
     question_text: question?.question_text || '',
     image_url: question?.image_url || '',
+    image_size: question?.image_size || 'medium',
     options: initialOptions,
     correct_answers: getCorrectAnswersFromQuestion(question),
     correct_answer: question?.correct_answer || 'A',
@@ -276,8 +287,10 @@ function QuestionForm({ question, rounds, onClose }) {
     const payload = {
       round_id: formData.round_id,
       question_type: formData.question_type,
+      title: formData.title,
       question_text: formData.question_text,
       image_url: formData.image_url,
+      image_size: formData.image_size,
       answer_mode: formData.answer_mode,
       correct_answer: isOpen ? formData.correct_answer : formData.correct_answers.join(','),
     };
@@ -312,8 +325,18 @@ function QuestionForm({ question, rounds, onClose }) {
 
           <label style={st.label}>Round:</label>
           <select value={formData.round_id} onChange={(e) => handleChange('round_id', parseInt(e.target.value))} style={st.selectInput}>
-            {rounds.map((r) => <option key={r.id} value={r.id}>Round {r.round_number}</option>)}
+            {rounds.map((r) => <option key={r.id} value={r.id}>Round {r.round_number}{r.name ? ` — ${r.name}` : ''}</option>)}
           </select>
+
+          <label style={st.label}>Title (internal only):</label>
+          <input
+            type="text"
+            value={formData.title}
+            onChange={(e) => handleChange('title', e.target.value)}
+            style={st.inputField}
+            placeholder="e.g. Capital cities"
+          />
+          <p style={st.hint}>Only you see this in the dashboard — teams never do.</p>
 
           {/* Drag & Drop Image Upload */}
           <label style={st.label}>Image (optional):</label>
@@ -344,6 +367,30 @@ function QuestionForm({ question, rounds, onClose }) {
             )}
             <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileSelect} style={{ display: 'none' }} />
           </div>
+
+          {formData.image_url && (
+            <>
+              <label style={st.label}>Image size:</label>
+              <div style={st.correctAnswers}>
+                {['small', 'medium', 'large'].map((size) => (
+                  <label key={size} style={{
+                    ...st.correctAnswerChip,
+                    ...(formData.image_size === size ? st.correctAnswerChipSelected : {}),
+                    textTransform: 'capitalize',
+                  }}>
+                    <input
+                      type="radio"
+                      name="image_size"
+                      checked={formData.image_size === size}
+                      onChange={() => handleChange('image_size', size)}
+                      style={{ display: 'none' }}
+                    />
+                    {size}
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
 
           <label style={st.label}>Question:</label>
           <textarea value={formData.question_text} onChange={(e) => handleChange('question_text', e.target.value)} style={st.textarea} rows="3" placeholder="Enter your question..." required />
