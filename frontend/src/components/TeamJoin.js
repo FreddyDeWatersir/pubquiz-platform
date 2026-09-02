@@ -1,19 +1,26 @@
 import React, { useState } from 'react';
 import { API_URL } from '../config';
 import { colors, commonStyles } from '../theme';
+import { translator, normalizeLanguage } from '../i18n';
 
 function TeamJoin({ onJoinSuccess }) {
   const [step, setStep] = useState('code');
   const [accessCode, setAccessCode] = useState('');
   const [quizId, setQuizId] = useState(null);
   const [quizName, setQuizName] = useState('');
+  // Unknown until the code is checked — we don't know which quiz they mean —
+  // so step one renders in English and everything after it in the quiz's
+  // language.
+  const [language, setLanguage] = useState('en');
   const [teamName, setTeamName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const tt = translator(language);
+
   const handleVerifyCode = async () => {
     if (!accessCode.trim()) {
-      setError('Please enter a quiz code');
+      setError(tt('enterCodeError'));
       return;
     }
     setLoading(true);
@@ -28,12 +35,13 @@ function TeamJoin({ onJoinSuccess }) {
       if (response.ok) {
         setQuizId(data.quizId);
         setQuizName(data.quizName);
+        setLanguage(normalizeLanguage(data.language));
         setStep('name');
       } else {
-        setError(data.error || 'Invalid code');
+        setError(data.error || tt('invalidCode'));
       }
     } catch (err) {
-      setError('Could not connect to server');
+      setError(tt('connectionError'));
     } finally {
       setLoading(false);
     }
@@ -41,7 +49,7 @@ function TeamJoin({ onJoinSuccess }) {
 
   const handleJoin = async () => {
     if (!teamName.trim()) {
-      setError('Please enter a team name');
+      setError(tt('enterTeamNameError'));
       return;
     }
     setLoading(true);
@@ -54,12 +62,12 @@ function TeamJoin({ onJoinSuccess }) {
       });
       const data = await response.json();
       if (response.ok) {
-        onJoinSuccess(data.sessionToken, data.teamName);
+        onJoinSuccess(data.sessionToken, data.teamName, data.language || language);
       } else {
-        setError(data.error || 'Failed to join quiz');
+        setError(data.error || tt('joinFailed'));
       }
     } catch (err) {
-      setError('Could not connect to server');
+      setError(tt('connectionError'));
     } finally {
       setLoading(false);
     }
@@ -76,10 +84,10 @@ function TeamJoin({ onJoinSuccess }) {
 
         {step === 'code' ? (
           <>
-            <p style={styles.subtitle}>Enter the quiz code to join</p>
+            <p style={styles.subtitle}>{tt('enterCodePrompt')}</p>
             <input
               type="text"
-              placeholder="QUIZ CODE"
+              placeholder={tt('quizCodePlaceholder')}
               value={accessCode}
               onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
               onKeyPress={(e) => e.key === 'Enter' && handleVerifyCode()}
@@ -94,7 +102,7 @@ function TeamJoin({ onJoinSuccess }) {
               style={styles.button}
               disabled={loading}
             >
-              {loading ? 'Checking...' : 'Enter'}
+              {loading ? tt('checking') : tt('enter')}
             </button>
           </>
         ) : (
@@ -102,10 +110,10 @@ function TeamJoin({ onJoinSuccess }) {
             <div style={styles.quizBadge}>
               <span style={styles.quizBadgeText}>{quizName}</span>
             </div>
-            <p style={styles.subtitle}>Choose your team name</p>
+            <p style={styles.subtitle}>{tt('chooseTeamName')}</p>
             <input
               type="text"
-              placeholder="Team Name"
+              placeholder={tt('teamNamePlaceholder')}
               value={teamName}
               onChange={(e) => setTeamName(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleJoin()}
@@ -119,13 +127,13 @@ function TeamJoin({ onJoinSuccess }) {
               style={styles.button}
               disabled={loading}
             >
-              {loading ? 'Joining...' : 'Join Quiz'}
+              {loading ? tt('joining') : tt('joinQuiz')}
             </button>
             <button
-              onClick={() => { setStep('code'); setError(''); setAccessCode(''); }}
+              onClick={() => { setStep('code'); setError(''); setAccessCode(''); setLanguage('en'); }}
               style={styles.backButton}
             >
-              ← Different code
+              {tt('differentCode')}
             </button>
           </>
         )}

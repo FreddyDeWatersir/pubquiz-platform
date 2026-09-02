@@ -171,6 +171,10 @@ function formatQuestionForClient(row, { includeCorrectAnswer = false } = {}) {
     answer_mode: answerMode,
     image_url: row.image_url,
     image_size: row.image_size || 'medium',
+    // Whether teams see the "A." / "B." prefix next to each option. Stored per
+    // question so a name-matching round can hide them while the rest of the
+    // quiz keeps them. Letters are still what gets scored and exported.
+    show_option_letters: row.show_option_letters === 0 ? 0 : 1,
     option_a: row.option_a,
     option_b: row.option_b,
     option_c: row.option_c,

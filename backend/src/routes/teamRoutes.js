@@ -13,7 +13,7 @@ router.post('/verify-code', async (req, res) => {
 
   try {
     const quiz = await dbHelpers.get(
-      'SELECT id, name FROM quizzes WHERE access_code = ? AND status != ?',
+      'SELECT id, name, language FROM quizzes WHERE access_code = ? AND status != ?',
       [accessCode.toUpperCase(), 'archived']
     );
 
@@ -23,7 +23,11 @@ router.post('/verify-code', async (req, res) => {
 
     res.json({
       quizId: quiz.id,
-      quizName: quiz.name
+      quizName: quiz.name,
+      // Returned here so the rest of the join flow is already in the right
+      // language. The code-entry step itself can't be — we don't know which
+      // quiz they mean until the code is checked.
+      language: quiz.language === 'nl' ? 'nl' : 'en'
     });
   } catch (error) {
     console.error('Error verifying code:', error);
@@ -42,7 +46,7 @@ router.post('/register', async (req, res) => {
 
   try {
     // Verify quiz exists
-    const quiz = await dbHelpers.get('SELECT id, name FROM quizzes WHERE id = ?', [quizId]);
+    const quiz = await dbHelpers.get('SELECT id, name, language FROM quizzes WHERE id = ?', [quizId]);
     if (!quiz) {
       return res.status(404).json({ error: 'Quiz not found' });
     }
@@ -69,6 +73,7 @@ router.post('/register', async (req, res) => {
       teamName,
       quizId: quiz.id,
       quizName: quiz.name,
+      language: quiz.language === 'nl' ? 'nl' : 'en',
       sessionToken,
       message: 'Team registered successfully'
     });

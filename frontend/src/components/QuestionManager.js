@@ -11,6 +11,12 @@ import {
   MIN_OPTIONS,
 } from '../utils/questionOptions';
 
+/** Question text is optional now, so this has to survive null/undefined. */
+function truncate(text, max = 70) {
+  const value = text == null ? '' : String(text);
+  return value.length > max ? `${value.slice(0, max - 3)}...` : value;
+}
+
 function QuestionManager() {
   const [quizzes, setQuizzes] = useState([]);
   const [selectedQuizId, setSelectedQuizId] = useState(null);
@@ -19,7 +25,10 @@ function QuestionManager() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState(null);
-  
+  // Collapsed rounds, by id. Rounds start expanded: on a quiz you're actively
+  // writing you want to see the questions, not click into every round.
+  const [collapsedRoundIds, setCollapsedRoundIds] = useState([]);
+
   const navigate = useNavigate();
 
 useEffect(() => {
@@ -86,6 +95,15 @@ useEffect(() => {
     }
   };
 
+  const toggleRound = (roundId) => {
+    setCollapsedRoundIds((prev) =>
+      prev.includes(roundId) ? prev.filter((id) => id !== roundId) : [...prev, roundId]
+    );
+  };
+
+  const roundLabel = (round) =>
+    `Round ${round.round_number}${round.name ? ` — ${round.name}` : ''}`;
+
   const handleEdit = (q) => { setEditingQuestion(q); setShowForm(true); };
   const handleAdd = () => { setEditingQuestion(null); setShowForm(true); };
   const handleCloseForm = () => { setShowForm(false); setEditingQuestion(null); fetchQuestions(); };
@@ -122,47 +140,99 @@ useEffect(() => {
             <button onClick={handleAdd} style={commonStyles.buttonSecondary}>+ Add New Question</button>
           </div>
 
-          <div style={st.tableWrap}>
-            <table style={st.table}>
-              <thead>
-                <tr style={st.tableHeader}>
-                  <th style={st.th}>Round</th><th style={st.th}>Type</th><th style={st.th}>Question</th><th style={st.th}>Answer</th><th style={st.th}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {questions.length === 0 ? (
-                  <tr><td colSpan="5" style={st.emptyText}>No questions yet. Add your first!</td></tr>
-                ) : questions.map((q) => (
-                  <tr key={q.id} style={st.tableRow}>
-                    <td style={st.td}>Round {q.round_number}</td>
-                    <td style={st.td}>
-                      <span style={q.question_type === 'open' ? commonStyles.badgePurple : commonStyles.badgeOrange}>
-                        {q.question_type === 'open' ? 'Open' : q.answer_mode === 'multi' ? 'Multi' : 'MC'}
-                      </span>
-                      {q.image_url && <span style={{ marginLeft: '6px' }}>📷</span>}
-                    </td>
-                    <td style={st.td}>
-                      {q.title ? (
-                        <>
-                          <strong>{q.title}</strong>
-                          <div style={{ color: colors.textDim, fontSize: '12px', marginTop: '2px' }}>
-                            {q.question_text.length > 60 ? q.question_text.slice(0, 57) + '...' : q.question_text}
-                          </div>
-                        </>
-                      ) : q.question_text}
-                    </td>
-                    <td style={st.td}>{q.correct_answers?.length ? q.correct_answers.join(', ') : q.correct_answer}</td>
-                    <td style={st.td}>
-                      <button onClick={() => moveQuestion(q, -1)} style={st.editBtn}>↑</button>
-                      <button onClick={() => moveQuestion(q, 1)} style={st.editBtn}>↓</button>
-                      <button onClick={() => handleEdit(q)} style={st.editBtn}>Edit</button>
-                      <button onClick={() => handleDelete(q.id)} style={st.deleteBtn}>Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {/* Grouped by round and collapsible, the same shape as the rounds
+              list on the organizer dashboard. A long quiz was one flat table
+              where every row repeated "Round 3" and nothing could be folded
+              away; here the round name is a heading you can collapse. */}
+          {rounds.length === 0 ? (
+            <div style={st.emptyState}>
+              <p style={st.emptyText}>No rounds yet. Add a round in the Organizer Dashboard first!</p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {[...rounds]
+                .sort((a, b) => a.round_number - b.round_number)
+                .map((round) => {
+                  const roundQuestions = questions.filter((q) => q.round_id === round.id);
+                  const isCollapsed = collapsedRoundIds.includes(round.id);
+
+                  return (
+                    <div key={round.id} style={st.roundGroup}>
+                      <button
+                        onClick={() => toggleRound(round.id)}
+                        style={st.roundHeader}
+                        title={isCollapsed ? 'Show questions' : 'Hide questions'}
+                      >
+                        <span style={st.roundCaret}>{isCollapsed ? '▶' : '▼'}</span>
+                        <span style={st.roundHeaderTitle}>{roundLabel(round)}</span>
+                        <span style={st.roundHeaderCount}>
+                          {roundQuestions.length} {roundQuestions.length === 1 ? 'question' : 'questions'}
+                        </span>
+                      </button>
+
+                      {!isCollapsed && (
+                        <div style={st.groupTableWrap}>
+                          {roundQuestions.length === 0 ? (
+                            <p style={st.emptyText}>No questions in this round yet.</p>
+                          ) : (
+                            <table style={st.table}>
+                              <thead>
+                                <tr style={st.tableHeader}>
+                                  <th style={st.th}>#</th>
+                                  <th style={st.th}>Type</th>
+                                  <th style={st.th}>Question</th>
+                                  <th style={st.th}>Answer</th>
+                                  <th style={st.th}>Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {roundQuestions.map((q, index) => (
+                                  <tr key={q.id} style={st.tableRow}>
+                                    <td style={{ ...st.td, color: colors.textMuted, fontWeight: '700' }}>
+                                      {index + 1}
+                                    </td>
+                                    <td style={st.td}>
+                                      <span style={q.question_type === 'open' ? commonStyles.badgePurple : commonStyles.badgeOrange}>
+                                        {q.question_type === 'open' ? 'Open' : q.answer_mode === 'multi' ? 'Multi' : 'MC'}
+                                      </span>
+                                      {q.image_url && <span style={{ marginLeft: '6px' }} title="Has image">📷</span>}
+                                      {q.question_type !== 'open' && q.show_option_letters === 0 && (
+                                        <span style={{ marginLeft: '6px' }} title="A/B/C letters hidden from teams">🚫🔤</span>
+                                      )}
+                                    </td>
+                                    <td style={st.td}>
+                                      {q.title ? (
+                                        <>
+                                          <strong>{q.title}</strong>
+                                          <div style={{ color: colors.textDim, fontSize: '12px', marginTop: '2px' }}>
+                                            {truncate(q.question_text)}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        truncate(q.question_text) || (
+                                          <em style={{ color: colors.textDim }}>No question text</em>
+                                        )
+                                      )}
+                                    </td>
+                                    <td style={st.td}>{q.correct_answers?.length ? q.correct_answers.join(', ') : q.correct_answer}</td>
+                                    <td style={{ ...st.td, whiteSpace: 'nowrap' }}>
+                                      <button onClick={() => moveQuestion(q, -1)} style={st.editBtn} disabled={index === 0}>↑</button>
+                                      <button onClick={() => moveQuestion(q, 1)} style={st.editBtn} disabled={index === roundQuestions.length - 1}>↓</button>
+                                      <button onClick={() => handleEdit(q)} style={st.editBtn}>Edit</button>
+                                      <button onClick={() => handleDelete(q.id)} style={st.deleteBtn}>Delete</button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          )}
         </>
       )}
 
@@ -184,6 +254,8 @@ function QuestionForm({ question, rounds, onClose }) {
     question_text: question?.question_text || '',
     image_url: question?.image_url || '',
     image_size: question?.image_size || 'medium',
+    // Defaults to on, including for every question that predates the column.
+    show_option_letters: question?.show_option_letters === 0 ? false : true,
     options: initialOptions,
     correct_answers: getCorrectAnswersFromQuestion(question),
     correct_answer: question?.correct_answer || 'A',
@@ -265,7 +337,8 @@ function QuestionForm({ question, rounds, onClose }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.question_text.trim()) { alert('Please enter a question'); return; }
+    // No check on question_text: an image-only or audio-cue question is valid
+    // with no wording at all, so the field is optional on both ends.
     if (isOpen && !formData.correct_answer.trim()) { alert('Please enter the correct answer'); return; }
 
     if (!isOpen) {
@@ -297,6 +370,7 @@ function QuestionForm({ question, rounds, onClose }) {
     if (!isOpen) {
       payload.options = formData.options.map((o) => o.trim()).filter(Boolean);
       payload.correct_answers = formData.correct_answers;
+      payload.show_option_letters = formData.show_option_letters;
     }
 
     try {
@@ -392,8 +466,9 @@ function QuestionForm({ question, rounds, onClose }) {
             </>
           )}
 
-          <label style={st.label}>Question:</label>
-          <textarea value={formData.question_text} onChange={(e) => handleChange('question_text', e.target.value)} style={st.textarea} rows="3" placeholder="Enter your question..." required />
+          <label style={st.label}>Question (optional):</label>
+          <textarea value={formData.question_text} onChange={(e) => handleChange('question_text', e.target.value)} style={st.textarea} rows="3" placeholder="Enter your question, or leave empty for an image-only question..." />
+          <p style={st.hint}>Leave this empty if the image or the options say it all.</p>
 
           {isOpen ? (
             <>
@@ -434,6 +509,26 @@ function QuestionForm({ question, rounds, onClose }) {
                   )}
                 </div>
               ))}
+              {/* Cosmetic only: the letters are still what gets stored, scored
+                  and exported, so grading and CSVs are unaffected. */}
+              <label style={st.label}>Letters:</label>
+              <label style={st.checkboxRow}>
+                <input
+                  type="checkbox"
+                  checked={formData.show_option_letters}
+                  onChange={(e) => handleChange('show_option_letters', e.target.checked)}
+                  style={st.checkbox}
+                />
+                <span>
+                  Show <strong>A.</strong> / <strong>B.</strong> / <strong>C.</strong> next to each option
+                </span>
+              </label>
+              <p style={st.hint}>
+                {formData.show_option_letters
+                  ? 'Teams see "A. Rens, B. Freddy, C. Jurre".'
+                  : 'Teams see just "Rens, Freddy, Jurre". Your grading and CSV export still use the letters.'}
+              </p>
+
               <label style={st.label}>Answer Mode:</label>
               <select value={formData.answer_mode} onChange={(e) => handleChange('answer_mode', e.target.value)} style={st.selectInput}>
                 <option value="single">Teams pick one answer (multiple can be correct)</option>
@@ -516,6 +611,27 @@ const st = {
   correctAnswers: { display: 'flex', flexWrap: 'wrap', gap: '8px' },
   correctAnswerChip: { padding: '8px 14px', backgroundColor: colors.bgInput, color: colors.textMuted, border: `1px solid ${colors.border}`, borderRadius: '8px', cursor: 'pointer', fontWeight: '700' },
   correctAnswerChipSelected: { backgroundColor: colors.successMuted, color: colors.success, borderColor: colors.success },
+  checkboxRow: {
+    display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
+    padding: '12px 14px', backgroundColor: colors.bgInput,
+    border: `1px solid ${colors.border}`, borderRadius: '10px',
+    fontSize: '15px', color: colors.text, userSelect: 'none',
+  },
+  checkbox: { width: '18px', height: '18px', accentColor: colors.primary, cursor: 'pointer' },
+  roundGroup: {
+    border: `1px solid ${colors.border}`, borderRadius: '14px',
+    overflow: 'hidden', backgroundColor: colors.bgCard,
+  },
+  roundHeader: {
+    display: 'flex', alignItems: 'center', gap: '12px', width: '100%',
+    padding: '16px 20px', backgroundColor: 'transparent', border: 'none',
+    borderBottom: `1px solid ${colors.border}`, cursor: 'pointer',
+    color: colors.text, textAlign: 'left', fontFamily: 'inherit',
+  },
+  roundCaret: { fontSize: '12px', color: colors.textMuted, width: '14px', flexShrink: 0 },
+  roundHeaderTitle: { fontSize: '17px', fontWeight: '700', flex: 1 },
+  roundHeaderCount: { fontSize: '13px', color: colors.textMuted, flexShrink: 0 },
+  groupTableWrap: { padding: '4px 20px 12px', overflowX: 'auto' },
 };
 
 export default QuestionManager;

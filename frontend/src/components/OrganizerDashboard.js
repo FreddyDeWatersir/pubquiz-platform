@@ -3,6 +3,7 @@ import { API_URL } from '../config';
 import io from 'socket.io-client';
 import { colors, commonStyles } from '../theme';
 import { getToken } from '../auth';
+import { LANGUAGES } from '../i18n';
 
 function formatSelectedAnswer(answer) {
   if (answer.question_type === 'open') {
@@ -49,10 +50,20 @@ function OrganizerDashboard() {
   const [newQuizName, setNewQuizName] = useState('');
   const [newQuizCode, setNewQuizCode] = useState('');
 
-  // Quiz editing (rename / change access code)
+  // Quiz editing (rename / change access code / language)
   const [editingQuiz, setEditingQuiz] = useState(false);
   const [editQuizName, setEditQuizName] = useState('');
   const [editQuizCode, setEditQuizCode] = useState('');
+  const [editQuizLanguage, setEditQuizLanguage] = useState('en');
+
+  // Saved team-facing screens (opening / break / end / messages)
+  const [screens, setScreens] = useState([]);
+  const [editingScreenId, setEditingScreenId] = useState(null); // id, or 'new'
+  const [screenTitleDraft, setScreenTitleDraft] = useState('');
+  const [screenBodyDraft, setScreenBodyDraft] = useState('');
+  // What teams are looking at right now, as far as this dashboard knows.
+  // Purely a UI affordance so you can see which button is "live".
+  const [liveDisplay, setLiveDisplay] = useState(null); // {type:'screen',id} | {type:'leaderboard',mode}
 
   // Round question list (expandable dropdown) + round renaming
   const [allQuestions, setAllQuestions] = useState([]);
@@ -91,6 +102,8 @@ function OrganizerDashboard() {
     newSocket.on('organizer:roundActivated', (data) => {
       showToast('Round activated! All teams received questions.');
       fetchRounds(selectedQuizId);
+      // The server drops any screen or leaderboard when a round goes live.
+      setLiveDisplay(null);
     });
 
     newSocket.on('organizer:roundClosed', (data) => {
@@ -107,6 +120,7 @@ function OrganizerDashboard() {
     fetchRounds(selectedQuizId);
     fetchLeaderboard(selectedQuizId);
     fetchAllQuestions(selectedQuizId);
+    fetchScreens(selectedQuizId);
 
     return () => {
       newSocket.disconnect();
@@ -163,6 +177,99 @@ function OrganizerDashboard() {
     } catch (error) {
       console.error('Error fetching questions:', error);
     }
+  };
+
+  const fetchScreens = async (quizId) => {
+    try {
+      const response = await fetch(`${API_URL}/api/organizer/quiz/${quizId}/screens`);
+      const data = await response.json();
+      setScreens(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Error fetching screens:', error);
+    }
+  };
+
+  const startNewScreen = () => {
+    setEditingScreenId('new');
+    setScreenTitleDraft('');
+    setScreenBodyDraft('');
+  };
+
+  const startEditScreen = (screen) => {
+    setEditingScreenId(screen.id);
+    setScreenTitleDraft(screen.title || '');
+    setScreenBodyDraft(screen.body || '');
+  };
+
+  const cancelScreenEdit = () => {
+    setEditingScreenId(null);
+    setScreenTitleDraft('');
+    setScreenBodyDraft('');
+  };
+
+  const saveScreen = async () => {
+    if (!screenTitleDraft.trim()) {
+      showToast('Give the screen a title');
+      return;
+    }
+    const isNew = editingScreenId === 'new';
+    const url = isNew
+      ? `${API_URL}/api/organizer/quiz/${selectedQuizId}/screens`
+      : `${API_URL}/api/organizer/screens/${editingScreenId}`;
+
+    try {
+      const response = await fetch(url, {
+        method: isNew ? 'POST' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: screenTitleDraft.trim(), body: screenBodyDraft }),
+      });
+      if (response.ok) {
+        fetchScreens(selectedQuizId);
+        cancelScreenEdit();
+      } else {
+        const data = await response.json();
+        showToast(data.error || 'Failed to save screen');
+      }
+    } catch (error) {
+      showToast('Failed to save screen');
+    }
+  };
+
+  const deleteScreen = async (screenId, title) => {
+    if (!window.confirm(`Delete the screen "${title}"?`)) return;
+    try {
+      const response = await fetch(`${API_URL}/api/organizer/screens/${screenId}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        if (liveDisplay && liveDisplay.type === 'screen' && liveDisplay.id === screenId) {
+          setLiveDisplay(null);
+        }
+        fetchScreens(selectedQuizId);
+      }
+    } catch (error) {
+      console.error('Error deleting screen:', error);
+    }
+  };
+
+  const showScreenToTeams = (screen) => {
+    if (!socket) {
+      showToast('WebSocket not connected!');
+      return;
+    }
+    socket.emit('organizer:showScreen', { quizId: selectedQuizId, screenId: screen.id });
+    setLiveDisplay({ type: 'screen', id: screen.id });
+    showToast(`Showing "${screen.title}" to teams 📺`);
+  };
+
+  const backToWaitingRoom = () => {
+    if (!socket) {
+      showToast('WebSocket not connected!');
+      return;
+    }
+    socket.emit('organizer:hideScreen', { quizId: selectedQuizId });
+    setLiveDisplay(null);
+    showToast('Teams are back on the waiting screen');
   };
 
   const createQuiz = async () => {
@@ -287,6 +394,7 @@ function OrganizerDashboard() {
     const quiz = quizzes.find((q) => q.id === selectedQuizId);
     setEditQuizName(quiz?.name || '');
     setEditQuizCode(quiz?.access_code || '');
+    setEditQuizLanguage(quiz?.language === 'nl' ? 'nl' : 'en');
     setEditingQuiz(true);
   };
 
@@ -299,7 +407,11 @@ function OrganizerDashboard() {
       const response = await fetch(`${API_URL}/api/organizer/quizzes/${selectedQuizId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editQuizName.trim(), access_code: editQuizCode.trim() }),
+        body: JSON.stringify({
+          name: editQuizName.trim(),
+          access_code: editQuizCode.trim(),
+          language: editQuizLanguage,
+        }),
       });
       const data = await response.json();
       if (response.ok) {
@@ -314,13 +426,16 @@ function OrganizerDashboard() {
     }
   };
 
-  const showLeaderboardToTeams = () => {
+  // mode: 'top3' shows the podium plus each team's own position;
+  //       'all' shows the full standings.
+  const showLeaderboardToTeams = (mode = 'top3') => {
     if (!socket) {
       showToast('WebSocket not connected!');
       return;
     }
-    socket.emit('organizer:showLeaderboard', { quizId: selectedQuizId });
-    showToast('Leaderboard shown to teams! 📣');
+    socket.emit('organizer:showLeaderboard', { quizId: selectedQuizId, mode });
+    setLiveDisplay({ type: 'leaderboard', mode });
+    showToast(mode === 'all' ? 'Full leaderboard shown to teams! 📣' : 'Top 3 shown to teams! 📣');
   };
 
   const copyRound = async (roundId) => {
@@ -683,6 +798,17 @@ function OrganizerDashboard() {
               placeholder="Access code"
               maxLength={20}
             />
+            {/* Language of everything TEAMS see. This dashboard stays English. */}
+            <select
+              value={editQuizLanguage}
+              onChange={(e) => setEditQuizLanguage(e.target.value)}
+              style={{ ...commonStyles.input, width: '150px', cursor: 'pointer' }}
+              title="Language teams see"
+            >
+              {LANGUAGES.map((lang) => (
+                <option key={lang.code} value={lang.code}>{lang.label}</option>
+              ))}
+            </select>
             <button onClick={saveQuizEdit} style={s.saveBtn}>Save</button>
             <button onClick={() => setEditingQuiz(false)} style={s.ghostBtn}>Cancel</button>
           </div>
@@ -690,10 +816,12 @@ function OrganizerDashboard() {
           <div>
             <h1 style={s.title}>
               {selectedQuiz?.name || 'Quiz'}
-              <button onClick={startEditQuiz} style={s.editIconBtn} title="Edit name or password">✏️</button>
+              <button onClick={startEditQuiz} style={s.editIconBtn} title="Edit name, password or language">✏️</button>
             </h1>
             <span style={{ color: colors.textMuted, fontSize: '14px' }}>
               Code: {selectedQuiz?.access_code}
+              <span style={s.statDot}>·</span>
+              Teams see: {selectedQuiz?.language === 'nl' ? 'Nederlands' : 'English'}
             </span>
           </div>
         )}
@@ -718,6 +846,85 @@ function OrganizerDashboard() {
                   </span>
                 </div>
               ))
+            )}
+          </div>
+        </div>
+
+        {/* ──────────────────────────────────────────────────────────
+            SCREENS — what teams see when no round is running.
+            Saved per quiz so the opening and closing text doesn't have to be
+            retyped each night; a one-off message is a screen you show once.
+            ────────────────────────────────────────────────────────── */}
+        <div style={s.section}>
+          <div style={s.sectionHeader}>
+            <h2 style={s.sectionTitle}>📺 Screens</h2>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={startNewScreen} style={s.addBtn}>+ New Screen</button>
+              <button onClick={backToWaitingRoom} style={s.ghostBtn}>
+                ↩ Back to waiting room
+              </button>
+            </div>
+          </div>
+
+          {editingScreenId !== null && (
+            <div style={s.createForm}>
+              <input
+                type="text"
+                placeholder="Screen title (e.g. Welcome, Break, Thanks for playing)"
+                value={screenTitleDraft}
+                onChange={(e) => setScreenTitleDraft(e.target.value)}
+                style={commonStyles.input}
+                autoFocus
+              />
+              <textarea
+                placeholder="Message shown underneath (optional). Line breaks are kept."
+                value={screenBodyDraft}
+                onChange={(e) => setScreenBodyDraft(e.target.value)}
+                style={{ ...commonStyles.input, minHeight: '90px', resize: 'vertical', fontFamily: 'inherit' }}
+              />
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button onClick={saveScreen} style={s.saveBtn}>
+                  {editingScreenId === 'new' ? 'Create Screen' : 'Save Screen'}
+                </button>
+                <button onClick={cancelScreenEdit} style={s.ghostBtn}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {screens.length === 0 ? (
+              <p style={s.emptyText}>
+                No screens yet. Add an opening, a break and an end screen and you can
+                push any of them to every team with one click.
+              </p>
+            ) : (
+              screens.map((screen) => {
+                const isLive = liveDisplay && liveDisplay.type === 'screen' && liveDisplay.id === screen.id;
+                return (
+                  <div key={screen.id} style={{ ...s.roundCard, ...(isLive ? s.liveCard : {}) }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
+                      <h3 style={{ fontSize: '17px', margin: 0, fontWeight: '700' }}>{screen.title}</h3>
+                      {isLive && <span style={commonStyles.badgeGreen}>LIVE</span>}
+                      {screen.body && (
+                        <span style={s.screenPreview}>
+                          {screen.body.length > 70 ? `${screen.body.slice(0, 67)}...` : screen.body}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button onClick={() => showScreenToTeams(screen)} style={s.purpleBtn}>
+                        📣 Show
+                      </button>
+                      <button onClick={() => startEditScreen(screen)} style={s.activateBtn}>
+                        Edit
+                      </button>
+                      <button onClick={() => deleteScreen(screen.id, screen.title)} style={s.deleteSmBtn}>
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
@@ -989,9 +1196,30 @@ function OrganizerDashboard() {
           <div style={s.sectionHeader}>
             <h2 style={s.sectionTitle}>🏆 Leaderboard</h2>
             {leaderboard.length > 0 && (
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={showLeaderboardToTeams} style={s.purpleBtn}>
-                  📣 Show to Teams
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {/* Chosen per reveal rather than as a setting: early in the night
+                    the podium keeps the tension, at the end everyone wants to
+                    see where they landed. */}
+                <button
+                  onClick={() => showLeaderboardToTeams('top3')}
+                  style={{
+                    ...s.purpleBtn,
+                    ...(liveDisplay?.type === 'leaderboard' && liveDisplay.mode === 'top3' ? s.liveBtn : {}),
+                  }}
+                >
+                  📣 Show top 3
+                </button>
+                <button
+                  onClick={() => showLeaderboardToTeams('all')}
+                  style={{
+                    ...s.purpleBtn,
+                    ...(liveDisplay?.type === 'leaderboard' && liveDisplay.mode === 'all' ? s.liveBtn : {}),
+                  }}
+                >
+                  📣 Show all teams
+                </button>
+                <button onClick={backToWaitingRoom} style={s.ghostBtn}>
+                  ↩ Hide
                 </button>
                 <button onClick={exportLeaderboard} style={s.exportBtn}>
                   📊 Export CSV
@@ -1170,6 +1398,18 @@ const s = {
     border: `1px solid ${colors.border}`, flexWrap: 'wrap', gap: '10px',
   },
   roundWrap: { display: 'flex', flexDirection: 'column' },
+  liveCard: {
+    borderColor: colors.success,
+    boxShadow: `0 0 0 1px ${colors.success}`,
+  },
+  liveBtn: {
+    outline: `2px solid ${colors.success}`,
+    outlineOffset: '2px',
+  },
+  screenPreview: {
+    color: colors.textMuted, fontSize: '13px',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
   expandBtn: {
     width: '28px', height: '28px', border: `1px solid ${colors.border}`,
     borderRadius: '6px', cursor: 'pointer', fontSize: '12px',

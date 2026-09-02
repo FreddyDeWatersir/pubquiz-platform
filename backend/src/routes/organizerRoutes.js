@@ -62,9 +62,19 @@ router.post('/quizzes', async (req, res) => {
 });
 
 // Update a quiz
+//
+// The previous version passed every field straight into the query as
+// `COALESCE(?, name)`. When the dashboard sent only { name, access_code },
+// `status` arrived as `undefined` — and mysql2's execute() rejects undefined
+// bind parameters outright ("Bind parameters must not contain undefined"),
+// so every rename in production came back as "Failed to update the quiz".
+// SQLite tolerated it, which is why it only ever broke on the VPS.
+//
+// Building the SET clause from the keys actually present avoids the whole
+// class of problem: a field that wasn't sent is simply not part of the query.
 router.put('/quizzes/:quizId', async (req, res) => {
   const { quizId } = req.params;
-  const { name, access_code, status } = req.body;
+  const { name, access_code, status, language } = req.body;
 
   try {
     // If changing access code, check it's not taken by another quiz
@@ -78,13 +88,34 @@ router.put('/quizzes/:quizId', async (req, res) => {
       }
     }
 
+    const updates = [];
+    const params = [];
+
+    if (name !== undefined && name !== null && String(name).trim()) {
+      updates.push('name = ?');
+      params.push(String(name).trim());
+    }
+    if (access_code !== undefined && access_code !== null && String(access_code).trim()) {
+      updates.push('access_code = ?');
+      params.push(String(access_code).trim().toUpperCase());
+    }
+    if (status !== undefined && status !== null) {
+      updates.push('status = ?');
+      params.push(status);
+    }
+    if (language !== undefined && language !== null) {
+      updates.push('language = ?');
+      params.push(language === 'nl' ? 'nl' : 'en');
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+
+    params.push(quizId);
     await dbHelpers.run(
-      `UPDATE quizzes SET 
-        name = COALESCE(?, name),
-        access_code = COALESCE(?, access_code),
-        status = COALESCE(?, status)
-       WHERE id = ?`,
-      [name, access_code ? access_code.toUpperCase() : null, status, quizId]
+      `UPDATE quizzes SET ${updates.join(', ')} WHERE id = ?`,
+      params
     );
 
     res.json({ message: 'Quiz updated successfully' });
@@ -125,6 +156,22 @@ router.delete('/quizzes/:quizId', async (req, res) => {
   }
 });
 
+/**
+ * "Music" -> "Music copy" -> "Music copy 2" -> "Music copy 3"
+ * Returns null for an unnamed round so it stays unnamed.
+ */
+function buildCopyName(name) {
+  if (!name || !String(name).trim()) return null;
+  const base = String(name).trim();
+
+  const repeat = base.match(/^(.*\bcopy)(?:\s+(\d+))?$/i);
+  if (repeat) {
+    const n = repeat[2] ? parseInt(repeat[2], 10) : 1;
+    return `${repeat[1]} ${n + 1}`;
+  }
+  return `${base} copy`;
+}
+
 // Copy a round and all its questions into another quiz
 router.post('/rounds/:roundId/copy', async (req, res) => {
   const { roundId } = req.params;
@@ -153,21 +200,32 @@ router.post('/rounds/:roundId/copy', async (req, res) => {
     );
     const newRoundNumber = (last?.max_round || 0) + 1;
 
+    // Carry the round's name across. A copy of "Music" becomes "Music copy",
+    // and copying that again gives "Music copy 2" rather than "Music copy copy",
+    // so repeat copies stay readable. An unnamed round stays unnamed.
+    const copiedName = buildCopyName(sourceRound.name);
+
     const inserted = await dbHelpers.run(
-      'INSERT INTO rounds (quiz_id, round_number, is_active, is_closed) VALUES (?, ?, 0, 0)',
-      [targetQuizId, newRoundNumber]
+      'INSERT INTO rounds (quiz_id, round_number, name, is_active, is_closed) VALUES (?, ?, ?, 0, 0)',
+      [targetQuizId, newRoundNumber, copiedName]
     );
     const newRoundId = inserted.id;
 
-    for (const q of questions) {
+    // sort_order, title, image_size and show_option_letters were being dropped
+    // here, so a copied round lost its question order and per-question display
+    // settings along with its name.
+    for (const [index, q] of questions.entries()) {
       await dbHelpers.run(
         `INSERT INTO questions
-         (round_id, question_text, question_type, image_url, option_a, option_b, option_c, option_d, options_json, answer_mode, correct_answers_json, correct_answer)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (round_id, question_text, question_type, image_url, image_size, title, option_a, option_b, option_c, option_d, options_json, answer_mode, correct_answers_json, correct_answer, sort_order, show_option_letters)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           newRoundId, q.question_text, q.question_type, q.image_url,
+          q.image_size || 'medium', q.title || null,
           q.option_a, q.option_b, q.option_c, q.option_d,
-          q.options_json, q.answer_mode, q.correct_answers_json, q.correct_answer
+          q.options_json, q.answer_mode, q.correct_answers_json, q.correct_answer,
+          q.sort_order || index + 1,
+          q.show_option_letters === 0 ? 0 : 1,
         ]
       );
     }
@@ -180,6 +238,7 @@ router.post('/rounds/:roundId/copy', async (req, res) => {
         id: newRoundId,
         quiz_id: parseInt(targetQuizId),
         round_number: newRoundNumber,
+        name: copiedName,
         is_active: 0,
         is_closed: 0
       }
@@ -187,6 +246,99 @@ router.post('/rounds/:roundId/copy', async (req, res) => {
   } catch (error) {
     console.error('Error copying round:', error);
     res.status(500).json({ error: 'Failed to copy round' });
+  }
+});
+
+// ==========================================
+// TEAM-FACING SCREENS (opening / break / end / messages)
+// ==========================================
+//
+// A screen is just a title and a body that the organizer can push onto every
+// team's device instead of the default "waiting for the quizmaster" room.
+// Saving them per quiz means the opening and closing text doesn't have to be
+// retyped each night; a one-off message is simply a screen you show once.
+
+// List a quiz's screens
+router.get('/quiz/:quizId/screens', async (req, res) => {
+  const { quizId } = req.params;
+
+  try {
+    const screens = await dbHelpers.all(
+      'SELECT * FROM quiz_screens WHERE quiz_id = ? ORDER BY sort_order, id',
+      [quizId]
+    );
+    res.json(screens);
+  } catch (error) {
+    console.error('Error fetching screens:', error);
+    res.status(500).json({ error: 'Failed to fetch screens' });
+  }
+});
+
+// Create a screen
+router.post('/quiz/:quizId/screens', async (req, res) => {
+  const { quizId } = req.params;
+  const { title, body } = req.body;
+
+  if (!title || !String(title).trim()) {
+    return res.status(400).json({ error: 'A screen title is required' });
+  }
+
+  try {
+    const last = await dbHelpers.get(
+      'SELECT MAX(sort_order) as max_order FROM quiz_screens WHERE quiz_id = ?',
+      [quizId]
+    );
+    const result = await dbHelpers.run(
+      'INSERT INTO quiz_screens (quiz_id, title, body, sort_order) VALUES (?, ?, ?, ?)',
+      [quizId, String(title).trim(), body ? String(body) : null, (last?.max_order || 0) + 1]
+    );
+
+    res.status(201).json({
+      message: 'Screen created',
+      screen: {
+        id: result.id,
+        quiz_id: parseInt(quizId),
+        title: String(title).trim(),
+        body: body ? String(body) : null,
+      },
+    });
+  } catch (error) {
+    console.error('Error creating screen:', error);
+    res.status(500).json({ error: 'Failed to create screen' });
+  }
+});
+
+// Update a screen
+router.put('/screens/:screenId', async (req, res) => {
+  const { screenId } = req.params;
+  const { title, body } = req.body;
+
+  if (!title || !String(title).trim()) {
+    return res.status(400).json({ error: 'A screen title is required' });
+  }
+
+  try {
+    await dbHelpers.run(
+      'UPDATE quiz_screens SET title = ?, body = ? WHERE id = ?',
+      [String(title).trim(), body ? String(body) : null, screenId]
+    );
+    res.json({ message: 'Screen updated' });
+  } catch (error) {
+    console.error('Error updating screen:', error);
+    res.status(500).json({ error: 'Failed to update screen' });
+  }
+});
+
+// Delete a screen
+router.delete('/screens/:screenId', async (req, res) => {
+  const { screenId } = req.params;
+
+  try {
+    await dbHelpers.run('DELETE FROM quiz_screens WHERE id = ?', [screenId]);
+    res.json({ message: 'Screen deleted' });
+  } catch (error) {
+    console.error('Error deleting screen:', error);
+    res.status(500).json({ error: 'Failed to delete screen' });
   }
 });
 

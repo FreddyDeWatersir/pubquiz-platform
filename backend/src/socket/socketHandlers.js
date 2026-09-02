@@ -6,6 +6,27 @@ const {
   scoreSelectedAnswers,
 } = require('../utils/questionOptions');
 
+// What each quiz is currently showing its teams, when it isn't a round.
+// Kept in memory (not the database) because it is per-evening ephemeral state
+// and PM2 restarts mid-quiz are already disruptive for other reasons. Its job
+// is to make a team that reloads, or joins late, land on the same screen as
+// everyone else instead of dropping back to "waiting for the quizmaster".
+//   key:   String(quizId)
+//   value: { type: 'leaderboard', leaderboard, mode } | { type: 'screen', screen }
+const displayState = new Map();
+
+const TEAM_QUESTION_COLUMNS = `id, question_text, question_type, image_url,
+        option_a, option_b, option_c, option_d, options_json, answer_mode,
+        image_size, show_option_letters`;
+
+async function loadRoundQuestions(dbHelpers, roundId) {
+  return dbHelpers.all(
+    `SELECT ${TEAM_QUESTION_COLUMNS}
+     FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
+    [roundId]
+  );
+}
+
 function setupSocketHandlers(io) {
   io.on('connection', (socket) => {
     console.log('New client connected:', socket.id);
@@ -24,13 +45,19 @@ function setupSocketHandlers(io) {
           socket.join(`quiz-${team.quiz_id}`);
           socket.teamId = team.id;
           socket.quizId = team.quiz_id;
-          
+
           console.log(`Team ${team.team_name} joined quiz ${team.quiz_id}`);
-          
+
+          const quiz = await dbHelpers.get(
+            'SELECT language FROM quizzes WHERE id = ?',
+            [team.quiz_id]
+          );
+
           socket.emit('team:joined', {
             teamId: team.id,
             teamName: team.team_name,
-            quizId: team.quiz_id
+            quizId: team.quiz_id,
+            language: quiz?.language === 'nl' ? 'nl' : 'en',
           });
 
           // Check if there's already an active round
@@ -39,22 +66,27 @@ function setupSocketHandlers(io) {
             [team.quiz_id]
           );
 
-          if (currentRound) {
-            // Only send questions if round is not closed
-            if (!currentRound.is_closed) {
-              const questionRows = await dbHelpers.all(
-                `SELECT id, question_text, question_type, image_url,
-                        option_a, option_b, option_c, option_d, options_json, answer_mode, image_size, image_size
-                 FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
-                [currentRound.id]
-              );
+          if (currentRound && !currentRound.is_closed) {
+            const questionRows = await loadRoundQuestions(dbHelpers, currentRound.id);
 
-              socket.emit('round:started', {
-                roundNumber: currentRound.round_number,
-                questions: formatQuestionsForClient(questionRows),
+            socket.emit('round:started', {
+              roundNumber: currentRound.round_number,
+              roundName: currentRound.name || null,
+              questions: formatQuestionsForClient(questionRows),
+            });
+          } else {
+            // No live round: replay whatever the room is currently showing, so a
+            // reload or a late join doesn't strand this team on the default
+            // waiting screen while everyone else sees the break screen.
+            const current = displayState.get(String(team.quiz_id));
+            if (current && current.type === 'leaderboard') {
+              socket.emit('leaderboard:show', {
+                leaderboard: current.leaderboard,
+                mode: current.mode,
               });
+            } else if (current && current.type === 'screen') {
+              socket.emit('screen:show', current.screen);
             }
-            // If round is closed, team stays on waiting screen
           }
         } else {
           socket.emit('error', { message: 'Invalid session token' });
@@ -162,8 +194,8 @@ function setupSocketHandlers(io) {
       const { roundId } = data;
       
       try {
-        const round = await dbHelpers.get('SELECT quiz_id, round_number FROM rounds WHERE id = ?', [roundId]);
-        
+        const round = await dbHelpers.get('SELECT quiz_id, round_number, name FROM rounds WHERE id = ?', [roundId]);
+
         // Deactivate all rounds for this quiz first
         await dbHelpers.run(
           'UPDATE rounds SET is_active = 0 WHERE quiz_id = ?',
@@ -177,16 +209,15 @@ function setupSocketHandlers(io) {
         );
 
         // Get questions for this round (WITHOUT correct answers)
-        const questionRows = await dbHelpers.all(
-          `SELECT id, question_text, question_type, image_url,
-                  option_a, option_b, option_c, option_d, options_json, answer_mode, image_size
-           FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
-          [roundId]
-        );
+        const questionRows = await loadRoundQuestions(dbHelpers, roundId);
+
+        // A live round outranks any screen or leaderboard that was showing.
+        displayState.delete(String(round.quiz_id));
 
         // Broadcast to all teams in this quiz
         io.to(`quiz-${round.quiz_id}`).emit('round:started', {
           roundNumber: round.round_number,
+          roundName: round.name || null,
           questions: formatQuestionsForClient(questionRows),
         });
 
@@ -231,7 +262,7 @@ function setupSocketHandlers(io) {
       const { roundId } = data;
 
       try {
-        const round = await dbHelpers.get('SELECT quiz_id, round_number FROM rounds WHERE id = ?', [roundId]);
+        const round = await dbHelpers.get('SELECT quiz_id, round_number, name FROM rounds WHERE id = ?', [roundId]);
 
         await dbHelpers.run(
           'UPDATE rounds SET is_closed = 0 WHERE id = ?',
@@ -239,15 +270,13 @@ function setupSocketHandlers(io) {
         );
 
         // Re-send questions to all teams
-        const questionRows = await dbHelpers.all(
-          `SELECT id, question_text, question_type, image_url,
-                  option_a, option_b, option_c, option_d, options_json, answer_mode, image_size
-           FROM questions WHERE round_id = ? ORDER BY sort_order, id`,
-          [roundId]
-        );
+        const questionRows = await loadRoundQuestions(dbHelpers, roundId);
+
+        displayState.delete(String(round.quiz_id));
 
         io.to(`quiz-${round.quiz_id}`).emit('round:started', {
           roundNumber: round.round_number,
+          roundName: round.name || null,
           questions: formatQuestionsForClient(questionRows),
         });
 
@@ -259,10 +288,13 @@ function setupSocketHandlers(io) {
       }
     });
 
-    // Organizer reveals the leaderboard to all teams
+    // Organizer reveals the leaderboard to all teams.
+    // mode 'top3' (default) shows the podium plus the viewing team's own row;
+    // mode 'all' sends the full standings.
     socket.on('organizer:showLeaderboard', async (data) => {
       if (!socket.isOrganizer) return socket.emit('error', { message: 'Unauthorized' });
       const { quizId } = data;
+      const mode = data && data.mode === 'all' ? 'all' : 'top3';
 
       try {
         const leaderboard = await dbHelpers.all(
@@ -279,9 +311,11 @@ function setupSocketHandlers(io) {
           [quizId]
         );
 
-        io.to(`quiz-${quizId}`).emit('leaderboard:show', { leaderboard });
-        socket.emit('organizer:leaderboardShown', { success: true });
-        console.log(`Leaderboard shown to teams for quiz ${quizId}`);
+        displayState.set(String(quizId), { type: 'leaderboard', leaderboard, mode });
+
+        io.to(`quiz-${quizId}`).emit('leaderboard:show', { leaderboard, mode });
+        socket.emit('organizer:leaderboardShown', { success: true, mode });
+        console.log(`Leaderboard (${mode}) shown to teams for quiz ${quizId}`);
       } catch (error) {
         console.error('Error showing leaderboard:', error);
         socket.emit('error', { message: 'Failed to show leaderboard' });
@@ -292,8 +326,47 @@ function setupSocketHandlers(io) {
     socket.on('organizer:hideLeaderboard', (data) => {
       if (!socket.isOrganizer) return socket.emit('error', { message: 'Unauthorized' });
       const { quizId } = data;
+      const current = displayState.get(String(quizId));
+      if (current && current.type === 'leaderboard') displayState.delete(String(quizId));
       io.to(`quiz-${quizId}`).emit('leaderboard:hide', {});
       socket.emit('organizer:leaderboardHidden', { success: true });
+    });
+
+    // Organizer pushes a saved screen (opening / break / end / a message)
+    socket.on('organizer:showScreen', async (data) => {
+      if (!socket.isOrganizer) return socket.emit('error', { message: 'Unauthorized' });
+      const { quizId, screenId } = data || {};
+
+      try {
+        const screen = await dbHelpers.get(
+          'SELECT id, title, body FROM quiz_screens WHERE id = ? AND quiz_id = ?',
+          [screenId, quizId]
+        );
+
+        if (!screen) {
+          return socket.emit('error', { message: 'Screen not found' });
+        }
+
+        const payload = { id: screen.id, title: screen.title, body: screen.body || '' };
+        displayState.set(String(quizId), { type: 'screen', screen: payload });
+
+        io.to(`quiz-${quizId}`).emit('screen:show', payload);
+        socket.emit('organizer:screenShown', { success: true, screenId: screen.id });
+        console.log(`Screen "${screen.title}" shown to teams for quiz ${quizId}`);
+      } catch (error) {
+        console.error('Error showing screen:', error);
+        socket.emit('error', { message: 'Failed to show screen' });
+      }
+    });
+
+    // Organizer sends everyone back to the default waiting room
+    socket.on('organizer:hideScreen', (data) => {
+      if (!socket.isOrganizer) return socket.emit('error', { message: 'Unauthorized' });
+      const { quizId } = data || {};
+      displayState.delete(String(quizId));
+      io.to(`quiz-${quizId}`).emit('screen:hide', {});
+      io.to(`quiz-${quizId}`).emit('leaderboard:hide', {});
+      socket.emit('organizer:screenHidden', { success: true });
     });
 
     socket.on('disconnect', () => {

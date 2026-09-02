@@ -27,9 +27,10 @@ router.get('/questions', async (req, res) => {
 
   try {
     let sql = `
-      SELECT 
+      SELECT
         q.*,
         r.round_number,
+        r.name as round_name,
         r.quiz_id
        FROM questions q
        LEFT JOIN rounds r ON q.round_id = r.id
@@ -103,6 +104,7 @@ router.post('/questions', async (req, res) => {
     image_url,
     image_size,
     title,
+    show_option_letters,
     option_a,
     option_b,
     option_c,
@@ -115,8 +117,11 @@ router.post('/questions', async (req, res) => {
 
   const type = question_type || 'multiple_choice';
 
-  if (!round_id || !question_text || (type === 'open' && !correct_answer)) {
-    return res.status(400).json({ error: 'Round, question text, and correct answer are required' });
+  // question_text is deliberately optional: an image-only or audio-cue question
+  // often needs no wording at all. The column is NOT NULL, so an omitted text
+  // is stored as an empty string rather than null.
+  if (!round_id || (type === 'open' && !correct_answer)) {
+    return res.status(400).json({ error: 'Round and correct answer are required' });
   }
 
   let mcFields = {
@@ -149,15 +154,16 @@ router.post('/questions', async (req, res) => {
   try {
     const result = await dbHelpers.run(
       `INSERT INTO questions
-       (round_id, question_text, question_type, image_url, image_size, title, option_a, option_b, option_c, option_d, options_json, answer_mode, correct_answers_json, correct_answer)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (round_id, question_text, question_type, image_url, image_size, title, show_option_letters, option_a, option_b, option_c, option_d, options_json, answer_mode, correct_answers_json, correct_answer)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         round_id,
-        question_text,
+        question_text || '',
         type,
         image_url || null,
         image_size || 'medium',
         title && title.trim() ? title.trim() : null,
+        show_option_letters === false || show_option_letters === 0 ? 0 : 1,
         mcFields.option_a,
         mcFields.option_b,
         mcFields.option_c,
@@ -191,6 +197,7 @@ router.put('/questions/:id', async (req, res) => {
     image_url,
     image_size,
     title,
+    show_option_letters,
     option_a,
     option_b,
     option_c,
@@ -203,8 +210,9 @@ router.put('/questions/:id', async (req, res) => {
 
   const type = question_type || 'multiple_choice';
 
-  if (!round_id || !question_text || (type === 'open' && !correct_answer)) {
-    return res.status(400).json({ error: 'Round, question text, and correct answer are required' });
+  // See the note on the create route: question_text is optional.
+  if (!round_id || (type === 'open' && !correct_answer)) {
+    return res.status(400).json({ error: 'Round and correct answer are required' });
   }
 
   let mcFields = {
@@ -238,16 +246,18 @@ router.put('/questions/:id', async (req, res) => {
     await dbHelpers.run(
       `UPDATE questions
        SET round_id = ?, question_text = ?, question_type = ?, image_url = ?, image_size = ?, title = ?,
+           show_option_letters = ?,
            option_a = ?, option_b = ?, option_c = ?, option_d = ?, options_json = ?,
            answer_mode = ?, correct_answers_json = ?, correct_answer = ?
        WHERE id = ?`,
       [
         round_id,
-        question_text,
+        question_text || '',
         type,
         image_url || null,
         image_size || 'medium',
         title && title.trim() ? title.trim() : null,
+        show_option_letters === false || show_option_letters === 0 ? 0 : 1,
         mcFields.option_a,
         mcFields.option_b,
         mcFields.option_c,

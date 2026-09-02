@@ -53,7 +53,36 @@ if (USE_MYSQL) {
           access_code VARCHAR(50) NOT NULL,
           status VARCHAR(20) DEFAULT 'draft',
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          is_active TINYINT(1) DEFAULT 1
+          is_active TINYINT(1) DEFAULT 1,
+          language VARCHAR(5) DEFAULT 'en'
+        )
+      `);
+
+      const quizMigrations = [
+        ['language', `ALTER TABLE quizzes ADD COLUMN language VARCHAR(5) DEFAULT 'en'`],
+      ];
+      for (const [name, sql] of quizMigrations) {
+        try {
+          await conn.query(sql);
+        } catch (err) {
+          if (err.code !== 'ER_DUP_FIELDNAME') {
+            console.error(`MySQL migration error (${name}):`, err.message);
+          }
+        }
+      }
+
+      // Saved team-facing screens (opening / break / end / anything else).
+      // Free-form rather than three fixed slots so an evening can have as
+      // many as it needs, reused across quizzes by copying the quiz.
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS quiz_screens (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          quiz_id INT NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          body TEXT,
+          sort_order INT DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (quiz_id) REFERENCES quizzes(id)
         )
       `);
 
@@ -97,6 +126,7 @@ if (USE_MYSQL) {
           answer_mode VARCHAR(20) DEFAULT 'single',
           correct_answers_json TEXT,
           correct_answer VARCHAR(500) NOT NULL,
+          show_option_letters TINYINT(1) DEFAULT 1,
           FOREIGN KEY (round_id) REFERENCES rounds(id)
         )
       `);
@@ -109,6 +139,7 @@ if (USE_MYSQL) {
         ['sort_order', `ALTER TABLE questions ADD COLUMN sort_order INT DEFAULT 0`],
         ['title', `ALTER TABLE questions ADD COLUMN title VARCHAR(255)`],
         ['image_size', `ALTER TABLE questions ADD COLUMN image_size VARCHAR(20) DEFAULT 'medium'`],
+        ['show_option_letters', `ALTER TABLE questions ADD COLUMN show_option_letters TINYINT(1) DEFAULT 1`],
       ];
       for (const [name, sql] of questionMigrations) {
         try {
@@ -234,7 +265,27 @@ if (USE_MYSQL) {
           access_code TEXT NOT NULL,
           status TEXT DEFAULT 'draft',
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          is_active INTEGER DEFAULT 1
+          is_active INTEGER DEFAULT 1,
+          language TEXT DEFAULT 'en'
+        )
+      `);
+
+      db.run(`ALTER TABLE quizzes ADD COLUMN language TEXT DEFAULT 'en'`, (err) => {
+        if (err && !err.message.includes('duplicate column')) {
+          console.error('Migration error (language):', err);
+        }
+      });
+
+      // Saved team-facing screens (opening / break / end / anything else).
+      db.run(`
+        CREATE TABLE IF NOT EXISTS quiz_screens (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          quiz_id INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT,
+          sort_order INTEGER DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (quiz_id) REFERENCES quizzes(id)
         )
       `);
 
@@ -277,6 +328,7 @@ if (USE_MYSQL) {
           answer_mode TEXT DEFAULT 'single',
           correct_answers_json TEXT,
           correct_answer TEXT NOT NULL,
+          show_option_letters INTEGER DEFAULT 1,
           FOREIGN KEY (round_id) REFERENCES rounds(id)
         )
       `);
@@ -294,7 +346,9 @@ if (USE_MYSQL) {
       migrateQuestionColumn('sort_order', `ALTER TABLE questions ADD COLUMN sort_order INTEGER DEFAULT 0`);
       migrateQuestionColumn('title', `ALTER TABLE questions ADD COLUMN title TEXT`);
       migrateQuestionColumn('image_size', `ALTER TABLE questions ADD COLUMN image_size TEXT DEFAULT 'medium'`);
-      
+      migrateQuestionColumn('show_option_letters', `ALTER TABLE questions ADD COLUMN show_option_letters INTEGER DEFAULT 1`);
+
+
       db.run(`
         CREATE TABLE IF NOT EXISTS teams (
           id INTEGER PRIMARY KEY AUTOINCREMENT,

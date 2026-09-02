@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { colors, commonStyles } from '../theme';
+import { translator } from '../i18n';
 
 const IMAGE_MAX_HEIGHT = { small: '200px', medium: '350px', large: '500px' };
 
@@ -18,10 +19,11 @@ function getQuestionOptions(question) {
     .filter(Boolean);
 }
 
-function QuestionDisplay({ questions, onSubmit, teamName, connected = true }) {
+function QuestionDisplay({ questions, onSubmit, teamName, connected = true, round = null, language = 'en' }) {
   const [answers, setAnswers] = useState({});
   const [textAnswers, setTextAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const tt = translator(language);
 
   const handleAnswerChange = (questionId, answer) => {
     setAnswers({ ...answers, [questionId]: answer });
@@ -53,7 +55,7 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true }) {
     });
 
     if (!allAnswered) {
-      alert('Please answer all questions before submitting!');
+      alert(tt('answerAllFirst'));
       return;
     }
 
@@ -89,9 +91,17 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true }) {
         <div style={styles.headerTop}>
           <span style={styles.teamBadge}>⚡ {teamName}</span>
           <span style={styles.progress}>
-            {answeredCount}/{questions.length} answered
+            {tt('answeredCount', { answered: answeredCount, total: questions.length })}
           </span>
         </div>
+        {/* Which round teams are in — "Round 2 — Music" / "Ronde 2 — Music".
+            The round's name is yours; only the word "Round" is translated. */}
+        {round && round.number != null && (
+          <h1 style={styles.roundTitle}>
+            {tt('round', { number: round.number })}
+            {round.name ? <span style={styles.roundName}> — {round.name}</span> : null}
+          </h1>
+        )}
         {/* Progress bar */}
         <div style={styles.progressBar}>
           <div style={{
@@ -104,11 +114,11 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true }) {
       <div style={styles.questionsContainer}>
         {questions.map((question, index) => (
           <div key={question.id} style={styles.questionCard}>
-            <div style={styles.questionHeader}>
-              <span style={styles.questionNumber}>Q{index + 1}</span>
-            </div>
-
-            <p style={styles.questionText}>{question.question_text}</p>
+            {/* No question number here by design — teams see the question and
+                nothing else above it. The internal `title` is never sent. */}
+            {question.question_text && String(question.question_text).trim() ? (
+              <p style={styles.questionText}>{question.question_text}</p>
+            ) : null}
 
             {question.image_url && (
               <div style={styles.imageContainer}>
@@ -126,7 +136,7 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true }) {
 
             {question.question_type === 'open' ? (
               <textarea
-                placeholder="Type your answer here..."
+                placeholder={tt('openAnswerPlaceholder')}
                 value={textAnswers[question.id] || ''}
                 onChange={(e) => handleTextChange(question.id, e.target.value)}
                 style={styles.openInput}
@@ -137,6 +147,10 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true }) {
               <div style={styles.optionsContainer}>
                 {getQuestionOptions(question).map((opt) => {
                   const isMulti = question.answer_mode === 'multi';
+                  // Cosmetic only. The letter is still what gets submitted,
+                  // scored and exported — hiding it just changes what teams
+                  // read, so "A. Rens, B. Freddy" becomes "Rens, Freddy".
+                  const showLetters = question.show_option_letters !== 0;
                   const selectedValues = Array.isArray(answers[question.id]) ? answers[question.id] : [];
                   const isSelected = isMulti
                     ? selectedValues.includes(opt.label)
@@ -147,14 +161,17 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true }) {
                       style={{
                         ...styles.optionLabel,
                         ...(isSelected ? styles.optionSelected : {}),
+                        ...(showLetters ? {} : styles.optionLabelNoLetter),
                       }}
                     >
-                      <span style={{
-                        ...styles.optionLetter,
-                        ...(isSelected ? styles.optionLetterSelected : {}),
-                      }}>
-                        {opt.label}
-                      </span>
+                      {showLetters && (
+                        <span style={{
+                          ...styles.optionLetter,
+                          ...(isSelected ? styles.optionLetterSelected : {}),
+                        }}>
+                          {opt.label}
+                        </span>
+                      )}
                       <input
                         type={isMulti ? 'checkbox' : 'radio'}
                         name={`question-${question.id}`}
@@ -185,7 +202,7 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true }) {
           }}
           disabled={submitting || !connected}
         >
-          {!connected ? 'Reconnecting…' : submitting ? 'Submitting...' : 'Submit Answers'}
+          {!connected ? tt('reconnectingShort') : submitting ? tt('submitting') : tt('submitAnswers')}
         </button>
       </div>
     </div>
@@ -220,6 +237,15 @@ const styles = {
     fontSize: '14px',
     fontWeight: '600',
   },
+  roundTitle: {
+    fontSize: '22px',
+    fontWeight: '800',
+    margin: '0 0 12px',
+    letterSpacing: '-0.3px',
+  },
+  roundName: {
+    color: colors.primary,
+  },
   progressBar: {
     width: '100%',
     height: '4px',
@@ -244,18 +270,6 @@ const styles = {
     marginBottom: '16px',
     border: `1px solid ${colors.border}`,
     animation: 'slideUp 0.4s ease',
-  },
-  questionHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '16px',
-  },
-  questionNumber: {
-    fontSize: '14px',
-    fontWeight: '800',
-    color: colors.primary,
-    letterSpacing: '1px',
   },
   imageContainer: {
     marginBottom: '16px',
@@ -295,6 +309,11 @@ const styles = {
   optionSelected: {
     backgroundColor: colors.primaryMuted,
     borderColor: `1px solid ${colors.primary}`,
+  },
+  // Without the letter badge the row loses its left inset, so add it back —
+  // otherwise a lettered and a letterless question look misaligned.
+  optionLabelNoLetter: {
+    paddingLeft: '20px',
   },
   optionLetter: {
     width: '32px',

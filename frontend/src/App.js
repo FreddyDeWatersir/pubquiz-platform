@@ -10,6 +10,7 @@ import './App.css';
 import AdminLogin from './components/AdminLogin';
 import QuestionManager from './components/QuestionManager';
 import { colors, commonStyles } from './theme';
+import { translator, normalizeLanguage } from './i18n';
 
 
 function RequireAuth({ children, next }) {
@@ -33,6 +34,15 @@ function App() {
 // ──────────────────────────────────────────────────────────
 // TEAM PAGE — with session persistence and proper WebSocket
 // ──────────────────────────────────────────────────────────
+//
+// The team client is a small state machine. Precedence, highest first:
+//   1. questions        — a round is live, answering beats everything
+//   2. customScreen     — the quizmaster pushed an opening/break/end screen
+//   3. leaderboardData  — the quizmaster revealed the standings
+//   4. waiting room     — the default between rounds
+// The server enforces the same order (activating a round clears any screen),
+// so the two can't disagree about what teams should be looking at.
+//
 function TeamPage() {
   // Initialize state from sessionStorage — survives page refresh
   const [sessionToken, setSessionToken] = useState(() => {
@@ -41,12 +51,22 @@ function TeamPage() {
   const [teamName, setTeamName] = useState(() => {
     return sessionStorage.getItem('quizTeamName') || '';
   });
+  // Seeded from the join response so the waiting room is already in the right
+  // language on first paint; 'team:joined' then confirms it from the server.
+  const [language, setLanguage] = useState(() => {
+    return normalizeLanguage(sessionStorage.getItem('quizLanguage'));
+  });
   const [questions, setQuestions] = useState(null);
+  const [round, setRound] = useState(null); // { number, name }
   const [socket, setSocket] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const [toast, setToast] = useState(null);
   const [leaderboardData, setLeaderboardData] = useState(null);
+  const [leaderboardMode, setLeaderboardMode] = useState('top3');
+  const [customScreen, setCustomScreen] = useState(null); // { title, body }
   const [myTeamId, setMyTeamId] = useState(null);
+
+  const tt = translator(language);
 
   const showToast = useCallback((message, duration = 3000) => {
     setToast(message);
@@ -90,19 +110,41 @@ function TeamPage() {
     newSocket.on('team:joined', (data) => {
       setConnectionStatus('connected');
       if (data && data.teamId) setMyTeamId(data.teamId);
+      // The quiz's language is authoritative on every (re)join, so switching a
+      // quiz to Dutch mid-evening reaches teams already sitting in the room.
+      if (data && data.language) {
+        const lang = normalizeLanguage(data.language);
+        setLanguage(lang);
+        sessionStorage.setItem('quizLanguage', lang);
+      }
     });
     newSocket.on('round:started', (data) => {
       setQuestions(data.questions);
+      setRound({ number: data.roundNumber, name: data.roundName || null });
+      setLeaderboardData(null);
+      setCustomScreen(null);
+    });
+    newSocket.on('round:closed', () => {
+      setQuestions(null);
+      setRound(null);
+    });
+    newSocket.on('team:submitted', () => {
+      showToast(tt('answersSubmitted'));
+      setQuestions(null);
+      setRound(null);
+    });
+    newSocket.on('leaderboard:show', (data) => {
+      setLeaderboardData(data.leaderboard);
+      setLeaderboardMode(data.mode === 'all' ? 'all' : 'top3');
+      setCustomScreen(null);
+    });
+    newSocket.on('leaderboard:hide', () => setLeaderboardData(null));
+    newSocket.on('screen:show', (data) => {
+      setCustomScreen({ title: data.title, body: data.body || '' });
       setLeaderboardData(null);
     });
-    newSocket.on('round:closed', () => setQuestions(null));
-    newSocket.on('team:submitted', () => {
-      showToast('Answers submitted! ✓');
-      setQuestions(null);
-    });
-    newSocket.on('leaderboard:show', (data) => setLeaderboardData(data.leaderboard));
-    newSocket.on('leaderboard:hide', () => setLeaderboardData(null));
-    newSocket.on('error', (data) => showToast(`Error: ${data.message}`));
+    newSocket.on('screen:hide', () => setCustomScreen(null));
+    newSocket.on('error', (data) => showToast(tt('errorPrefix', { message: data.message })));
     newSocket.on('disconnect', () => setConnectionStatus('reconnecting'));
     // Same story as 'reconnect' above: reconnection-lifecycle events live on
     // the Manager (newSocket.io), not the Socket. newSocket.on('reconnect_failed', ...)
@@ -110,7 +152,7 @@ function TeamPage() {
     // forever with no way to know retries were exhausted.
     newSocket.io.on('reconnect_failed', () => {
       setConnectionStatus('failed');
-      showToast('Connection lost. Try refreshing.');
+      showToast(tt('connectionLost'));
     });
 
     return () => {
@@ -118,6 +160,11 @@ function TeamPage() {
       setSocket(null);
       setConnectionStatus('disconnected');
     };
+    // `tt` is deliberately not a dependency: it changes identity whenever the
+    // language does, and re-running this effect would tear down and rebuild the
+    // socket mid-quiz. The handlers close over the translator that was current
+    // when they were registered, which only affects toast wording.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionToken, showToast]);
 
   // Mobile browsers throttle/suspend JS timers while a tab is backgrounded (e.g.
@@ -134,19 +181,29 @@ function TeamPage() {
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [socket]);
 
-  const handleJoinSuccess = (token, name) => {
+  const handleJoinSuccess = (token, name, joinLanguage) => {
+    const lang = normalizeLanguage(joinLanguage);
     sessionStorage.setItem('quizSessionToken', token);
     sessionStorage.setItem('quizTeamName', name);
+    sessionStorage.setItem('quizLanguage', lang);
     setSessionToken(token);
     setTeamName(name);
+    setLanguage(lang);
   };
 
+  // Leaving is destructive from the team's point of view — they have to find
+  // the code and re-join, and a duplicate team name is refused — so it asks
+  // first. Teams were hitting it by accident on phones.
   const handleLeaveTeam = () => {
+    if (!window.confirm(tt('leaveTeamConfirm', { name: teamName }))) return;
     sessionStorage.removeItem('quizSessionToken');
     sessionStorage.removeItem('quizTeamName');
     setSessionToken(null);
     setTeamName('');
     setQuestions(null);
+    setRound(null);
+    setCustomScreen(null);
+    setLeaderboardData(null);
   };
 
   // Submits with an ack + timeout so a stale post-backgrounding socket fails
@@ -155,7 +212,7 @@ function TeamPage() {
     const finish = (result) => { if (onResult) onResult(result); };
 
     if (!socket || !socket.connected) {
-      showToast("Not connected — reconnecting, please try Submit again in a moment.");
+      showToast(tt('notConnected'));
       finish({ success: false });
       return;
     }
@@ -164,7 +221,7 @@ function TeamPage() {
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
-      showToast("Couldn't reach the server — please tap Submit again.");
+      showToast(tt('submitUnreachable'));
       finish({ success: false });
     }, 6000);
 
@@ -175,7 +232,7 @@ function TeamPage() {
       if (ack && ack.success) {
         finish({ success: true });
       } else {
-        showToast("Couldn't submit — please tap Submit again.");
+        showToast(tt('submitFailed'));
         finish({ success: false });
       }
     });
@@ -193,12 +250,25 @@ function TeamPage() {
         onSubmit={handleSubmitAnswers}
         teamName={teamName}
         connected={connectionStatus === 'connected'}
+        round={round}
+        language={language}
       />
     );
   }
 
+  if (customScreen) {
+    return <CustomScreenView screen={customScreen} toast={toast} />;
+  }
+
   if (leaderboardData) {
-    return <LeaderboardView leaderboard={leaderboardData} myTeamId={myTeamId} />;
+    return (
+      <LeaderboardView
+        leaderboard={leaderboardData}
+        myTeamId={myTeamId}
+        mode={leaderboardMode}
+        language={language}
+      />
+    );
   }
 
   // Waiting screen
@@ -207,8 +277,8 @@ function TeamPage() {
       <div style={waitStyles.bgGlow} />
       <div style={waitStyles.content}>
         <img src="/logo.png" alt="Quiz Masters of Melody" style={waitStyles.logo} />
-        <h2 style={waitStyles.welcome}>Welcome, {teamName}!</h2>
-        <p style={waitStyles.subtitle}>Waiting for the quizmaster...</p>
+        <h2 style={waitStyles.welcome}>{tt('welcome', { name: teamName })}</h2>
+        <p style={waitStyles.subtitle}>{tt('waitingForQuizmaster')}</p>
 
         <div style={{
           ...waitStyles.statusBadge,
@@ -217,9 +287,9 @@ function TeamPage() {
           color: connectionStatus === 'connected' ? colors.success
             : connectionStatus === 'reconnecting' ? colors.warning : colors.error,
         }}>
-          {connectionStatus === 'connected' ? '● Connected'
-            : connectionStatus === 'reconnecting' ? '● Reconnecting...'
-            : '● Disconnected'}
+          {connectionStatus === 'connected' ? `● ${tt('connected')}`
+            : connectionStatus === 'reconnecting' ? `● ${tt('reconnecting')}`
+            : `● ${tt('disconnected')}`}
         </div>
 
         <div style={waitStyles.dots}>
@@ -229,7 +299,7 @@ function TeamPage() {
         </div>
 
         <button onClick={handleLeaveTeam} style={waitStyles.leaveBtn}>
-          Leave Team
+          {tt('leaveTeam')}
         </button>
       </div>
 
@@ -243,24 +313,48 @@ function formatScore(score) {
   return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(2);
 }
 
-// Shows the top 3 teams first, then — if the viewing team isn't already
-// in the top 3 — a divider and their own highlighted standing below.
-function LeaderboardView({ leaderboard, myTeamId }) {
-  const top3 = leaderboard.slice(0, 3);
+// An opening, break or end screen the quizmaster pushed. Deliberately plain:
+// whatever text you wrote is the whole point, so nothing competes with it.
+// Blank lines in the body are preserved (`white-space: pre-wrap`) so you can
+// write a few short lines rather than one paragraph.
+function CustomScreenView({ screen, toast }) {
+  return (
+    <div style={waitStyles.room}>
+      <div style={waitStyles.bgGlow} />
+      <div style={{ ...waitStyles.content, padding: '0 24px', maxWidth: '600px' }}>
+        <img src="/logo.png" alt="Quiz Masters of Melody" style={waitStyles.logo} />
+        <h2 style={screenStyles.title}>{screen.title}</h2>
+        {screen.body ? <p style={screenStyles.body}>{screen.body}</p> : null}
+      </div>
+      {toast && <div style={commonStyles.toast}>{toast}</div>}
+    </div>
+  );
+}
+
+// Two shapes, chosen by the quizmaster at reveal time:
+//   'top3' — the podium, then (if the viewing team isn't on it) a divider and
+//            their own highlighted standing below.
+//   'all'  — every team in order, with the viewing team's row highlighted.
+function LeaderboardView({ leaderboard, myTeamId, mode, language }) {
+  const tt = translator(language);
   const myIndex = leaderboard.findIndex((team) => team.id === myTeamId);
   const myEntry = myIndex >= 0 ? leaderboard[myIndex] : null;
-  const myInTop3 = myIndex >= 0 && myIndex < 3;
   const medals = ['🥇', '🥈', '🥉'];
+  const rankLabel = (i) => (i < 3 ? medals[i] : `#${i + 1}`);
+
+  const showAll = mode === 'all';
+  const visible = showAll ? leaderboard : leaderboard.slice(0, 3);
+  const myInVisible = myIndex >= 0 && myIndex < visible.length;
 
   return (
     <div style={waitStyles.room}>
       <div style={waitStyles.bgGlow} />
-      <div style={waitStyles.content}>
+      <div style={{ ...waitStyles.content, paddingTop: showAll ? '40px' : 0, paddingBottom: '40px' }}>
         <img src="/logo.png" alt="Quiz Masters of Melody" style={waitStyles.logo} />
-        <h2 style={waitStyles.welcome}>🏆 Leaderboard</h2>
+        <h2 style={waitStyles.welcome}>🏆 {tt('leaderboard')}</h2>
 
         <div style={leaderboardStyles.list}>
-          {top3.map((team, i) => (
+          {visible.map((team, i) => (
             <div
               key={team.id}
               style={{
@@ -268,14 +362,14 @@ function LeaderboardView({ leaderboard, myTeamId }) {
                 ...(team.id === myTeamId ? leaderboardStyles.rowMine : {}),
               }}
             >
-              <span style={leaderboardStyles.medal}>{medals[i]}</span>
+              <span style={leaderboardStyles.medal}>{rankLabel(i)}</span>
               <span style={leaderboardStyles.name}>{team.team_name}</span>
               <span style={leaderboardStyles.score}>{formatScore(team.score)}</span>
             </div>
           ))}
         </div>
 
-        {myEntry && !myInTop3 && (
+        {myEntry && !myInVisible && (
           <>
             <div style={leaderboardStyles.divider}>· · ·</div>
             <div style={leaderboardStyles.list}>
@@ -325,6 +419,17 @@ const waitStyles = {
   },
 };
 
+const screenStyles = {
+  title: {
+    fontSize: '32px', fontWeight: '800', marginBottom: '16px',
+    textAlign: 'center', lineHeight: '1.25',
+  },
+  body: {
+    fontSize: '18px', color: colors.textMuted, textAlign: 'center',
+    lineHeight: '1.7', whiteSpace: 'pre-wrap', margin: 0,
+  },
+};
+
 const leaderboardStyles = {
   list: {
     display: 'flex', flexDirection: 'column', gap: '10px',
@@ -338,7 +443,7 @@ const leaderboardStyles = {
   rowMine: {
     borderColor: colors.primary, backgroundColor: colors.primaryMuted,
   },
-  medal: { fontSize: '20px', width: '32px', textAlign: 'center', flexShrink: 0 },
+  medal: { fontSize: '20px', width: '38px', textAlign: 'center', flexShrink: 0 },
   name: { flex: 1, fontSize: '16px', fontWeight: '700', color: colors.text },
   score: { fontSize: '18px', fontWeight: '800', color: colors.primary },
   divider: {
