@@ -610,7 +610,7 @@ const st = {
   removeOptionBtn: { padding: '8px 12px', backgroundColor: colors.errorMuted, color: colors.error, border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', flexShrink: 0 },
   correctAnswers: { display: 'flex', flexWrap: 'wrap', gap: '8px' },
   correctAnswerChip: { padding: '8px 14px', backgroundColor: colors.bgInput, color: colors.textMuted, border: `1px solid ${colors.border}`, borderRadius: '8px', cursor: 'pointer', fontWeight: '700' },
-  correctAnswerChipSelected: { backgroundColor: colors.successMuted, color: colors.success, borderColor: colors.success },
+  correctAnswerChipSelected: { backgroundColor: colors.successMuted, color: colors.success, border: `1px solid ${colors.success}` },
   checkboxRow: {
     display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer',
     padding: '12px 14px', backgroundColor: colors.bgInput,

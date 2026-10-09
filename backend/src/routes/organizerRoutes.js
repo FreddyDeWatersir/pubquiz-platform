@@ -1,6 +1,41 @@
 const express = require('express');
 const router = express.Router();
 const { dbHelpers } = require('../database');
+const {
+  getLeaderboard,
+  getRoundHandIns,
+  acceptRoundDrafts,
+  countRoundDrafts,
+} = require('../utils/answers');
+const {
+  normalizeLinksInput,
+  normalizeCountdownInput,
+  formatScreenRow,
+} = require('../utils/screens');
+
+/**
+ * Validate a screen body from the editor. Shared by create and update so the
+ * two can't accept different things. Returns { values } or { error }.
+ */
+function readScreenInput(body) {
+  const { title, body: text, links, countdown_seconds } = body || {};
+  if (!title || !String(title).trim()) {
+    return { error: 'A screen title is required' };
+  }
+  const linkResult = normalizeLinksInput(links);
+  if (linkResult.error) return { error: linkResult.error };
+  const countdown = normalizeCountdownInput(countdown_seconds);
+  if (countdown.error) return { error: countdown.error };
+
+  return {
+    values: {
+      title: String(title).trim(),
+      body: text ? String(text) : null,
+      links_json: linkResult.links.length ? JSON.stringify(linkResult.links) : null,
+      countdown_seconds: countdown.seconds,
+    },
+  };
+}
 
 // ==========================================
 // QUIZ MANAGEMENT
@@ -267,7 +302,7 @@ router.get('/quiz/:quizId/screens', async (req, res) => {
       'SELECT * FROM quiz_screens WHERE quiz_id = ? ORDER BY sort_order, id',
       [quizId]
     );
-    res.json(screens);
+    res.json(screens.map(formatScreenRow));
   } catch (error) {
     console.error('Error fetching screens:', error);
     res.status(500).json({ error: 'Failed to fetch screens' });
@@ -277,11 +312,9 @@ router.get('/quiz/:quizId/screens', async (req, res) => {
 // Create a screen
 router.post('/quiz/:quizId/screens', async (req, res) => {
   const { quizId } = req.params;
-  const { title, body } = req.body;
-
-  if (!title || !String(title).trim()) {
-    return res.status(400).json({ error: 'A screen title is required' });
-  }
+  const input = readScreenInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const v = input.values;
 
   try {
     const last = await dbHelpers.get(
@@ -289,18 +322,14 @@ router.post('/quiz/:quizId/screens', async (req, res) => {
       [quizId]
     );
     const result = await dbHelpers.run(
-      'INSERT INTO quiz_screens (quiz_id, title, body, sort_order) VALUES (?, ?, ?, ?)',
-      [quizId, String(title).trim(), body ? String(body) : null, (last?.max_order || 0) + 1]
+      `INSERT INTO quiz_screens (quiz_id, title, body, links_json, countdown_seconds, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [quizId, v.title, v.body, v.links_json, v.countdown_seconds, (Number(last?.max_order) || 0) + 1]
     );
 
     res.status(201).json({
       message: 'Screen created',
-      screen: {
-        id: result.id,
-        quiz_id: parseInt(quizId),
-        title: String(title).trim(),
-        body: body ? String(body) : null,
-      },
+      screen: formatScreenRow({ id: result.id, quiz_id: parseInt(quizId), ...v }),
     });
   } catch (error) {
     console.error('Error creating screen:', error);
@@ -311,16 +340,14 @@ router.post('/quiz/:quizId/screens', async (req, res) => {
 // Update a screen
 router.put('/screens/:screenId', async (req, res) => {
   const { screenId } = req.params;
-  const { title, body } = req.body;
-
-  if (!title || !String(title).trim()) {
-    return res.status(400).json({ error: 'A screen title is required' });
-  }
+  const input = readScreenInput(req.body);
+  if (input.error) return res.status(400).json({ error: input.error });
+  const v = input.values;
 
   try {
     await dbHelpers.run(
-      'UPDATE quiz_screens SET title = ?, body = ? WHERE id = ?',
-      [String(title).trim(), body ? String(body) : null, screenId]
+      'UPDATE quiz_screens SET title = ?, body = ?, links_json = ?, countdown_seconds = ? WHERE id = ?',
+      [v.title, v.body, v.links_json, v.countdown_seconds, screenId]
     );
     res.json({ message: 'Screen updated' });
   } catch (error) {
@@ -457,6 +484,7 @@ router.get('/quiz/:quizId/round/:roundId/answers', async (req, res) => {
         a.answer_text,
         a.is_correct,
         a.score,
+        a.answer_status,
         a.question_id,
         t.team_name,
         t.id as team_id,
@@ -524,6 +552,56 @@ router.get('/quiz/:quizId/teams', async (req, res) => {
   }
 });
 
+// Rename a team. Teams can't rename themselves (and with the Leave Team button
+// gone they can't re-register either), so a typo at the door is the
+// organizer's to fix.
+router.put('/teams/:teamId', async (req, res) => {
+  const { teamId } = req.params;
+  const { team_name } = req.body || {};
+
+  if (!team_name || !String(team_name).trim()) {
+    return res.status(400).json({ error: 'A team name is required' });
+  }
+  const name = String(team_name).trim();
+
+  try {
+    const team = await dbHelpers.get('SELECT id, quiz_id FROM teams WHERE id = ?', [teamId]);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    // Same uniqueness rule the join flow enforces, scoped to the quiz.
+    const clash = await dbHelpers.get(
+      'SELECT id FROM teams WHERE quiz_id = ? AND team_name = ? AND id <> ?',
+      [team.quiz_id, name, teamId]
+    );
+    if (clash) return res.status(409).json({ error: 'Another team already has that name' });
+
+    await dbHelpers.run('UPDATE teams SET team_name = ? WHERE id = ?', [name, teamId]);
+    res.json({ message: 'Team renamed', team: { id: Number(teamId), team_name: name } });
+  } catch (error) {
+    console.error('Error renaming team:', error);
+    res.status(500).json({ error: 'Failed to rename team' });
+  }
+});
+
+// Remove a team and everything it answered. For ghost teams: a table that
+// registered twice leaves one behind on 0 points, permanently showing as
+// "not handed in".
+router.delete('/teams/:teamId', async (req, res) => {
+  const { teamId } = req.params;
+
+  try {
+    const team = await dbHelpers.get('SELECT id FROM teams WHERE id = ?', [teamId]);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+
+    await dbHelpers.run('DELETE FROM answers WHERE team_id = ?', [teamId]);
+    await dbHelpers.run('DELETE FROM teams WHERE id = ?', [teamId]);
+    res.json({ message: 'Team removed' });
+  } catch (error) {
+    console.error('Error removing team:', error);
+    res.status(500).json({ error: 'Failed to remove team' });
+  }
+});
+
 // Get all rounds for a quiz
 router.get('/quiz/:quizId/rounds', async (req, res) => {
   const { quizId } = req.params;
@@ -554,8 +632,11 @@ router.post('/rounds/:roundId/close', async (req, res) => {
       'UPDATE rounds SET is_closed = 1 WHERE id = ?',
       [roundId]
     );
+    // Same rule as the socket close: unsubmitted answers are left as drafts
+    // and reported, never counted automatically.
+    const pendingDrafts = await countRoundDrafts(dbHelpers, roundId);
 
-    res.json({ message: 'Round closed successfully' });
+    res.json({ message: 'Round closed successfully', pendingDrafts });
   } catch (error) {
     console.error('Error closing round:', error);
     res.status(500).json({ error: 'Failed to close round' });
@@ -585,27 +666,51 @@ router.get('/quiz/:quizId/leaderboard', async (req, res) => {
   const { quizId } = req.params;
 
   try {
-    const leaderboard = await dbHelpers.all(
-      `SELECT 
-        t.id,
-        t.team_name,
-        COALESCE(SUM(a.score), 0) as score,
-        COUNT(a.id) as total_answered
-       FROM teams t
-       LEFT JOIN answers a ON t.id = a.team_id
-       WHERE t.quiz_id = ?
-       GROUP BY t.id, t.team_name
-       ORDER BY score DESC, total_answered DESC`,
-      [quizId]
-    );
-
-    res.json(leaderboard);
+    // Shared with the team-facing reveal so the two can never disagree, and so
+    // drafts are excluded in exactly one place.
+    res.json(await getLeaderboard(dbHelpers, quizId));
   } catch (error) {
     console.error('Error getting leaderboard:', error);
     res.status(500).json({ error: 'Failed to get leaderboard' });
   }
 });
 
+
+// Which teams have handed in a round — and which haven't.
+// status per team: 'submitted' | 'accepted' | 'drafting' | 'none'
+router.get('/quiz/:quizId/round/:roundId/hand-ins', async (req, res) => {
+  const { quizId, roundId } = req.params;
+
+  try {
+    const round = await dbHelpers.get(
+      'SELECT id FROM rounds WHERE id = ? AND quiz_id = ?',
+      [roundId, quizId]
+    );
+    if (!round) return res.status(404).json({ error: 'Round not found' });
+
+    res.json(await getRoundHandIns(dbHelpers, quizId, roundId));
+  } catch (error) {
+    console.error('Error getting hand-ins:', error);
+    res.status(500).json({ error: 'Failed to get hand-ins' });
+  }
+});
+
+// Count the answers of teams that never pressed Submit in this round.
+// Deliberately a separate, explicit action: closing a round does not do it.
+router.post('/rounds/:roundId/accept-drafts', async (req, res) => {
+  const { roundId } = req.params;
+
+  try {
+    const round = await dbHelpers.get('SELECT id FROM rounds WHERE id = ?', [roundId]);
+    if (!round) return res.status(404).json({ error: 'Round not found' });
+
+    const accepted = await acceptRoundDrafts(dbHelpers, roundId);
+    res.json({ message: 'Unsubmitted answers accepted', accepted });
+  } catch (error) {
+    console.error('Error accepting drafts:', error);
+    res.status(500).json({ error: 'Failed to accept unsubmitted answers' });
+  }
+});
 
 // Reset everything - clear teams, answers, deactivate rounds
 router.post('/quiz/:quizId/reset', async (req, res) => {
@@ -647,4 +752,4 @@ router.post('/quiz/:quizId/reset', async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = router;

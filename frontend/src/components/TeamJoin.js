@@ -1,22 +1,35 @@
 import React, { useState } from 'react';
 import { API_URL } from '../config';
 import { colors, commonStyles } from '../theme';
-import { translator, normalizeLanguage } from '../i18n';
+import {
+  translator,
+  normalizeLanguage,
+  LANGUAGES,
+  getCodeScreenLanguage,
+  setCodeScreenLanguage,
+} from '../i18n';
 
 function TeamJoin({ onJoinSuccess }) {
   const [step, setStep] = useState('code');
   const [accessCode, setAccessCode] = useState('');
   const [quizId, setQuizId] = useState(null);
   const [quizName, setQuizName] = useState('');
-  // Unknown until the code is checked — we don't know which quiz they mean —
-  // so step one renders in English and everything after it in the quiz's
-  // language.
-  const [language, setLanguage] = useState('en');
+  // Step one comes before we know the quiz, so it uses the language the team
+  // picked with the NL/EN toggle (remembered on this phone; guessed from the
+  // phone's own language the first time). Once the code is accepted, the
+  // quiz's own language takes over for everything after it.
+  const [language, setLanguage] = useState(getCodeScreenLanguage);
   const [teamName, setTeamName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const tt = translator(language);
+
+  const pickCodeLanguage = (code) => {
+    setCodeScreenLanguage(code);
+    setLanguage(code);
+    setError('');
+  };
 
   const handleVerifyCode = async () => {
     if (!accessCode.trim()) {
@@ -84,6 +97,23 @@ function TeamJoin({ onJoinSuccess }) {
 
         {step === 'code' ? (
           <>
+            {/* Only on this step: after it, the quiz decides the language. */}
+            <div style={styles.langToggle} role="group" aria-label="Language / Taal">
+              {LANGUAGES.map((lang) => (
+                <button
+                  key={lang.code}
+                  type="button"
+                  onClick={() => pickCodeLanguage(lang.code)}
+                  aria-pressed={language === lang.code}
+                  style={{
+                    ...styles.langOption,
+                    ...(language === lang.code ? styles.langOptionActive : {}),
+                  }}
+                >
+                  {lang.code.toUpperCase()}
+                </button>
+              ))}
+            </div>
             <p style={styles.subtitle}>{tt('enterCodePrompt')}</p>
             <input
               type="text"
@@ -130,7 +160,7 @@ function TeamJoin({ onJoinSuccess }) {
               {loading ? tt('joining') : tt('joinQuiz')}
             </button>
             <button
-              onClick={() => { setStep('code'); setError(''); setAccessCode(''); setLanguage('en'); }}
+              onClick={() => { setStep('code'); setError(''); setAccessCode(''); setLanguage(getCodeScreenLanguage()); }}
               style={styles.backButton}
             >
               {tt('differentCode')}
@@ -222,6 +252,21 @@ const styles = {
     border: 'none',
     cursor: 'pointer',
     marginTop: '10px',
+  },
+  langToggle: {
+    position: 'absolute', top: '16px', right: '16px',
+    display: 'flex', gap: '2px', padding: '3px',
+    backgroundColor: colors.bgInput, border: `1px solid ${colors.border}`,
+    borderRadius: '10px',
+  },
+  langOption: {
+    padding: '6px 10px', fontSize: '12px', fontWeight: '700', letterSpacing: '0.5px',
+    backgroundColor: 'transparent', color: colors.textMuted,
+    border: 'none', borderRadius: '7px', cursor: 'pointer',
+    minWidth: '38px', minHeight: '30px',
+  },
+  langOptionActive: {
+    backgroundColor: colors.primary, color: '#fff',
   },
   error: {
     color: colors.error,

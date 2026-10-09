@@ -41,9 +41,6 @@ const strings = {
     connected: 'Connected',
     reconnecting: 'Reconnecting...',
     disconnected: 'Disconnected',
-    leaveTeam: 'Leave Team',
-    leaveTeamConfirm:
-      'Leave the team "{name}"?\n\nYou will go back to the code screen and have to join again. Answers you have already submitted are kept.',
 
     // Question view
     round: 'Round {number}',
@@ -59,6 +56,21 @@ const strings = {
     submitFailed: "Couldn't submit — please tap Submit again.",
     connectionLost: 'Connection lost. Try refreshing.',
     errorPrefix: 'Error: {message}',
+
+    // Review — what a team handed in, deliberately without right/wrong
+    reviewSubmittedTitle: 'Answers handed in ✓',
+    reviewSubmittedSubtitle: "This is what you handed in. You'll find out how you did later.",
+    reviewClosedTitle: 'Round closed',
+    // Deliberately makes no promise about scoring: whether these count is the
+    // quizmaster's decision after the round, not something we can state here.
+    reviewClosedSubtitle: 'The round closed before you handed in. This is what you had entered.',
+    noAnswer: 'No answer',
+    pictureQuestion: 'Picture question',
+    untitledQuestion: 'Question',
+
+    // Screens
+    backIn: 'Back in',
+    countdownDone: "We're starting again!",
 
     // Leaderboard
     leaderboard: 'Leaderboard',
@@ -87,9 +99,6 @@ const strings = {
     connected: 'Verbonden',
     reconnecting: 'Opnieuw verbinden...',
     disconnected: 'Geen verbinding',
-    leaveTeam: 'Team verlaten',
-    leaveTeamConfirm:
-      'Team "{name}" verlaten?\n\nJe gaat terug naar het codescherm en moet opnieuw meedoen. Al ingeleverde antwoorden blijven bewaard.',
 
     // Question view
     round: 'Ronde {number}',
@@ -106,6 +115,19 @@ const strings = {
     connectionLost: 'Verbinding verbroken. Probeer de pagina te verversen.',
     errorPrefix: 'Fout: {message}',
 
+    // Review — what a team handed in, deliberately without goed/fout
+    reviewSubmittedTitle: 'Antwoorden ingeleverd ✓',
+    reviewSubmittedSubtitle: 'Dit hebben jullie ingeleverd. Hoe het ging horen jullie later.',
+    reviewClosedTitle: 'Ronde gesloten',
+    reviewClosedSubtitle: 'De ronde werd gesloten voordat jullie inleverden. Dit hadden jullie ingevuld.',
+    noAnswer: 'Niet ingevuld',
+    pictureQuestion: 'Fotovraag',
+    untitledQuestion: 'Vraag',
+
+    // Screens
+    backIn: 'We gaan verder over',
+    countdownDone: 'We gaan weer beginnen!',
+
     // Leaderboard
     leaderboard: 'Scorebord',
   },
@@ -118,6 +140,32 @@ export const LANGUAGES = [
 
 export function normalizeLanguage(language) {
   return language === 'nl' ? 'nl' : 'en';
+}
+
+// ── Code-entry screen language ──
+// That one screen comes before we know the quiz, so it can't follow the
+// quiz's setting. Teams pick NL/EN there with a toggle, remembered on the
+// phone. Before anyone has picked, we guess from the phone's own language.
+// Once the code is accepted the quiz's language takes over, as before.
+const CODE_LANGUAGE_KEY = 'quizCodeLanguage';
+
+export function getCodeScreenLanguage() {
+  try {
+    const stored = localStorage.getItem(CODE_LANGUAGE_KEY);
+    if (stored) return normalizeLanguage(stored);
+  } catch {
+    // Private mode / blocked storage: fall through to the guess.
+  }
+  const phone = (typeof navigator !== 'undefined' && (navigator.language || '')) || '';
+  return phone.toLowerCase().startsWith('nl') ? 'nl' : 'en';
+}
+
+export function setCodeScreenLanguage(language) {
+  try {
+    localStorage.setItem(CODE_LANGUAGE_KEY, normalizeLanguage(language));
+  } catch {
+    // Not fatal: the choice just won't be remembered next time.
+  }
 }
 
 /**

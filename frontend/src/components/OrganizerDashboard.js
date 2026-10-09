@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { API_URL } from '../config';
 import io from 'socket.io-client';
 import { colors, commonStyles } from '../theme';
@@ -61,6 +61,23 @@ function OrganizerDashboard() {
   const [editingScreenId, setEditingScreenId] = useState(null); // id, or 'new'
   const [screenTitleDraft, setScreenTitleDraft] = useState('');
   const [screenBodyDraft, setScreenBodyDraft] = useState('');
+  // Always one blank row at the end to type into, dropped on save.
+  const [screenLinksDraft, setScreenLinksDraft] = useState([{ label: '', url: '' }]);
+  const [screenCountdownDraft, setScreenCountdownDraft] = useState(''); // minutes, as typed
+
+  // Who handed in, for one round. Fetched on demand, not polled: the socket
+  // already pushes 'team:progress' whenever a team touches an answer.
+  const [handInsRoundId, setHandInsRoundId] = useState(null);
+  const [handIns, setHandIns] = useState([]);
+
+  // Team editing
+  const [editingTeamId, setEditingTeamId] = useState(null);
+  const [teamNameDraft, setTeamNameDraft] = useState('');
+
+  // The socket effect runs once per quiz, so its handlers can't see later
+  // state. This ref lets them refresh whichever round's list is open.
+  const handInsRoundIdRef = useRef(null);
+  useEffect(() => { handInsRoundIdRef.current = handInsRoundId; }, [handInsRoundId]);
   // What teams are looking at right now, as far as this dashboard knows.
   // Purely a UI affordance so you can see which button is "live".
   const [liveDisplay, setLiveDisplay] = useState(null); // {type:'screen',id} | {type:'leaderboard',mode}
@@ -97,6 +114,14 @@ function OrganizerDashboard() {
     newSocket.on('team:answered', (data) => {
       console.log('Team answered:', data);
       fetchLeaderboard(selectedQuizId);
+      // A hand-in changes who is still outstanding.
+      if (handInsRoundIdRef.current) fetchHandIns(handInsRoundIdRef.current);
+    });
+
+    // A team touched an answer without handing in. Only the hand-ins list
+    // cares; the leaderboard must not move, because drafts don't score.
+    newSocket.on('team:progress', () => {
+      if (handInsRoundIdRef.current) fetchHandIns(handInsRoundIdRef.current);
     });
 
     newSocket.on('organizer:roundActivated', (data) => {
@@ -107,8 +132,17 @@ function OrganizerDashboard() {
     });
 
     newSocket.on('organizer:roundClosed', (data) => {
-      showToast('Round closed! Teams can no longer submit answers.');
+      const pending = (data && data.pendingDrafts) || 0;
+      showToast(
+        pending > 0
+          ? `Round closed. ${pending} unsubmitted ${pending === 1 ? 'answer is' : 'answers are'} waiting on you.`
+          : 'Round closed! Teams can no longer submit answers.',
+        pending > 0 ? 6000 : 3000
+      );
       fetchRounds(selectedQuizId);
+      // Open the hand-ins list straight away when something needs deciding,
+      // so unsubmitted answers can't be forgotten about silently.
+      if (data && data.roundId) fetchHandIns(data.roundId);
     });
 
     newSocket.on('organizer:roundReopened', (data) => {
@@ -125,6 +159,11 @@ function OrganizerDashboard() {
     return () => {
       newSocket.disconnect();
     };
+    // Deliberately keyed to the selected quiz alone. The fetch helpers are
+    // recreated on every render, so listing them would tear the socket down
+    // and reconnect constantly; the handlers read changing values through
+    // refs instead (see handInsRoundIdRef).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedQuizId]);
 
   const fetchQuizzes = async () => {
@@ -189,22 +228,53 @@ function OrganizerDashboard() {
     }
   };
 
+  // Links always carry a trailing blank row so there is somewhere to type.
+  const withBlankRow = (links) => [...links, { label: '', url: '' }];
+
   const startNewScreen = () => {
     setEditingScreenId('new');
     setScreenTitleDraft('');
     setScreenBodyDraft('');
+    setScreenLinksDraft([{ label: '', url: '' }]);
+    setScreenCountdownDraft('');
   };
 
   const startEditScreen = (screen) => {
     setEditingScreenId(screen.id);
     setScreenTitleDraft(screen.title || '');
     setScreenBodyDraft(screen.body || '');
+    setScreenLinksDraft(withBlankRow(
+      (screen.links || []).map((l) => ({ label: l.label || '', url: l.url || '' }))
+    ));
+    // Stored in seconds, edited in minutes: nobody sets a break in seconds.
+    setScreenCountdownDraft(
+      screen.countdown_seconds ? String(Math.round(screen.countdown_seconds / 60)) : ''
+    );
   };
 
   const cancelScreenEdit = () => {
     setEditingScreenId(null);
     setScreenTitleDraft('');
     setScreenBodyDraft('');
+    setScreenLinksDraft([{ label: '', url: '' }]);
+    setScreenCountdownDraft('');
+  };
+
+  const changeScreenLink = (index, field, value) => {
+    setScreenLinksDraft((prev) => {
+      const next = prev.map((l, i) => (i === index ? { ...l, [field]: value } : l));
+      // Typing in the last row grows the list by one more blank row.
+      const last = next[next.length - 1];
+      if (last && (last.label.trim() || last.url.trim())) return withBlankRow(next);
+      return next;
+    });
+  };
+
+  const removeScreenLink = (index) => {
+    setScreenLinksDraft((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length ? next : [{ label: '', url: '' }];
+    });
   };
 
   const saveScreen = async () => {
@@ -217,11 +287,22 @@ function OrganizerDashboard() {
       ? `${API_URL}/api/organizer/quiz/${selectedQuizId}/screens`
       : `${API_URL}/api/organizer/screens/${editingScreenId}`;
 
+    const minutes = screenCountdownDraft.trim();
+    if (minutes && !/^\d+$/.test(minutes)) {
+      showToast('Countdown must be a whole number of minutes');
+      return;
+    }
+
     try {
       const response = await fetch(url, {
         method: isNew ? 'POST' : 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: screenTitleDraft.trim(), body: screenBodyDraft }),
+        body: JSON.stringify({
+          title: screenTitleDraft.trim(),
+          body: screenBodyDraft,
+          links: screenLinksDraft.filter((l) => l.label.trim() || l.url.trim()),
+          countdown_seconds: minutes ? Number(minutes) * 60 : null,
+        }),
       });
       if (response.ok) {
         fetchScreens(selectedQuizId);
@@ -270,6 +351,110 @@ function OrganizerDashboard() {
     socket.emit('organizer:hideScreen', { quizId: selectedQuizId });
     setLiveDisplay(null);
     showToast('Teams are back on the waiting screen');
+  };
+
+  const fetchHandIns = async (roundId) => {
+    try {
+      const response = await fetch(
+        `${API_URL}/api/organizer/quiz/${selectedQuizId}/round/${roundId}/hand-ins`
+      );
+      if (!response.ok) return;
+      setHandIns(await response.json());
+      setHandInsRoundId(roundId);
+    } catch (error) {
+      console.error('Error fetching hand-ins:', error);
+    }
+  };
+
+  // Counts the answers of teams that never pressed Submit. Deliberately a
+  // button and not a side effect of closing the round: a team that tapped one
+  // option by accident shouldn't silently collect a point.
+  const acceptDrafts = async (roundId, pendingCount) => {
+    const confirmed = window.confirm(
+      `Count the unsubmitted answers of ${pendingCount === 1 ? 'this team' : 'these teams'}?\n\n`
+      + 'They will be scored exactly as if they had been handed in, and will show '
+      + 'as "accepted" in the review and the CSV. This cannot be undone from here.'
+    );
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`${API_URL}/api/organizer/rounds/${roundId}/accept-drafts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await response.json();
+      if (response.ok) {
+        showToast(`Counted ${data.accepted} unsubmitted ${data.accepted === 1 ? 'answer' : 'answers'}`);
+        fetchHandIns(roundId);
+        fetchLeaderboard(selectedQuizId);
+        if (gradingRoundId === roundId) fetchRoundAnswers(roundId);
+      } else {
+        showToast(data.error || 'Failed to accept answers');
+      }
+    } catch (error) {
+      showToast('Failed to accept answers');
+    }
+  };
+
+  const startEditTeam = (team) => {
+    setEditingTeamId(team.id);
+    setTeamNameDraft(team.team_name);
+  };
+
+  // Teams can't rename themselves and can't re-register under a new name, so
+  // a typo at the door has to be fixable from here.
+  const saveTeamName = async (teamId) => {
+    const name = teamNameDraft.trim();
+    if (!name) {
+      showToast('A team needs a name');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_URL}/api/organizer/teams/${teamId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team_name: name }),
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setEditingTeamId(null);
+        setTeamNameDraft('');
+        fetchTeams(selectedQuizId);
+        fetchLeaderboard(selectedQuizId);
+        if (handInsRoundId) fetchHandIns(handInsRoundId);
+      } else {
+        showToast(data.error || 'Failed to rename team');
+      }
+    } catch (error) {
+      showToast('Failed to rename team');
+    }
+  };
+
+  // For ghost teams: a table that registered twice leaves one behind on zero
+  // points, permanently showing as "not handed in".
+  const removeTeam = async (team) => {
+    const confirmed = window.confirm(
+      `Remove "${team.team_name}"?\n\nTheir answers are deleted and they disappear from `
+      + 'the leaderboard. If someone is still playing on that phone they will be sent '
+      + 'back to the code screen. This cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`${API_URL}/api/organizer/teams/${team.id}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        fetchTeams(selectedQuizId);
+        fetchLeaderboard(selectedQuizId);
+        if (handInsRoundId) fetchHandIns(handInsRoundId);
+      } else {
+        const data = await response.json();
+        showToast(data.error || 'Failed to remove team');
+      }
+    } catch (error) {
+      showToast('Failed to remove team');
+    }
   };
 
   const createQuiz = async () => {
@@ -840,10 +1025,48 @@ function OrganizerDashboard() {
             ) : (
               teams.map((team) => (
                 <div key={team.id} style={s.teamCard}>
-                  <span style={{ fontSize: '16px', fontWeight: '600' }}>{team.team_name}</span>
-                  <span style={{ fontSize: '12px', color: colors.textDim }}>
-                    {new Date(team.created_at).toLocaleTimeString()}
-                  </span>
+                  {editingTeamId === team.id ? (
+                    <>
+                      <input
+                        type="text"
+                        value={teamNameDraft}
+                        onChange={(e) => setTeamNameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveTeamName(team.id);
+                          if (e.key === 'Escape') setEditingTeamId(null);
+                        }}
+                        style={{ ...commonStyles.input, padding: '8px 10px', fontSize: '14px' }}
+                        autoFocus
+                      />
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button onClick={() => saveTeamName(team.id)} style={s.teamActionBtn}>Save</button>
+                        <button onClick={() => setEditingTeamId(null)} style={s.teamActionBtn}>Cancel</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontSize: '16px', fontWeight: '600' }}>{team.team_name}</span>
+                      <span style={{ fontSize: '12px', color: colors.textDim }}>
+                        {new Date(team.created_at).toLocaleTimeString()}
+                      </span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          onClick={() => startEditTeam(team)}
+                          style={s.teamActionBtn}
+                          title="Fix a typo in this team's name"
+                        >
+                          ✏️ Rename
+                        </button>
+                        <button
+                          onClick={() => removeTeam(team)}
+                          style={s.teamRemoveBtn}
+                          title="Remove this team and its answers"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ))
             )}
@@ -882,6 +1105,56 @@ function OrganizerDashboard() {
                 onChange={(e) => setScreenBodyDraft(e.target.value)}
                 style={{ ...commonStyles.input, minHeight: '90px', resize: 'vertical', fontFamily: 'inherit' }}
               />
+
+              {/* Link buttons: socials, the night's playlist, a feedback form.
+                  A bare domain is fine, https is assumed. */}
+              <label style={s.screenFieldLabel}>Buttons (optional)</label>
+              {screenLinksDraft.map((link, index) => (
+                <div key={index} style={s.linkRow}>
+                  <input
+                    type="text"
+                    placeholder="Button text (e.g. Our Instagram)"
+                    value={link.label}
+                    onChange={(e) => changeScreenLink(index, 'label', e.target.value)}
+                    style={{ ...commonStyles.input, flex: '1 1 160px', padding: '10px 12px', fontSize: '14px' }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="instagram.com/yourname"
+                    value={link.url}
+                    onChange={(e) => changeScreenLink(index, 'url', e.target.value)}
+                    style={{ ...commonStyles.input, flex: '2 1 200px', padding: '10px 12px', fontSize: '14px' }}
+                  />
+                  {(link.label.trim() || link.url.trim()) && (
+                    <button
+                      type="button"
+                      onClick={() => removeScreenLink(index)}
+                      style={s.teamRemoveBtn}
+                      title="Remove this button"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              ))}
+
+              {/* Counts down on every phone. Server-driven, so all tables
+                  see the same number regardless of their clocks. */}
+              <label style={s.screenFieldLabel}>Countdown (optional)</label>
+              <div style={s.linkRow}>
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="15"
+                  value={screenCountdownDraft}
+                  onChange={(e) => setScreenCountdownDraft(e.target.value)}
+                  style={{ ...commonStyles.input, width: '110px', padding: '10px 12px', fontSize: '14px' }}
+                />
+                <span style={{ color: colors.textMuted, fontSize: '14px' }}>
+                  minutes. Restarts each time you press Show. Leave empty for none.
+                </span>
+              </div>
+
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button onClick={saveScreen} style={s.saveBtn}>
                   {editingScreenId === 'new' ? 'Create Screen' : 'Save Screen'}
@@ -905,6 +1178,16 @@ function OrganizerDashboard() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
                       <h3 style={{ fontSize: '17px', margin: 0, fontWeight: '700' }}>{screen.title}</h3>
                       {isLive && <span style={commonStyles.badgeGreen}>LIVE</span>}
+                      {screen.countdown_seconds ? (
+                        <span style={commonStyles.badgeOrange}>
+                          ⏱ {Math.round(screen.countdown_seconds / 60)} min
+                        </span>
+                      ) : null}
+                      {screen.links && screen.links.length > 0 ? (
+                        <span style={commonStyles.badgePurple}>
+                          🔗 {screen.links.length}
+                        </span>
+                      ) : null}
                       {screen.body && (
                         <span style={s.screenPreview}>
                           {screen.body.length > 70 ? `${screen.body.slice(0, 67)}...` : screen.body}
@@ -1002,6 +1285,9 @@ function OrganizerDashboard() {
                     >
                       ↓
                     </button>
+                    <button onClick={() => fetchHandIns(round.id)} style={s.activateBtn}>
+                      ✅ Hand-ins
+                    </button>
                     <button onClick={() => fetchRoundAnswers(round.id)} style={s.purpleBtn}>
                       📝 Review
                     </button>
@@ -1087,6 +1373,96 @@ function OrganizerDashboard() {
           </div>
         </div>
 
+        {/* ──────────────────────────────────────────────────────────
+            HAND-INS — who handed a round in, and who didn't.
+            Closing a round does NOT count unsubmitted answers; they sit here
+            as drafts until accepted, so a team that tapped one option by
+            accident doesn't silently collect points.
+            ────────────────────────────────────────────────────────── */}
+        {handInsRoundId && (() => {
+          const round = rounds.find((r) => r.id === handInsRoundId);
+          const pending = handIns.filter((h) => h.status === 'drafting');
+          const pendingAnswers = pending.reduce((sum, h) => sum + h.draft_count, 0);
+          const isOpen = round && round.is_active === 1 && !round.is_closed;
+
+          const label = {
+            submitted: { text: 'Handed in', style: commonStyles.badgeGreen },
+            accepted: { text: 'Accepted', style: commonStyles.badgePurple },
+            drafting: {
+              text: isOpen ? 'Still answering' : 'Not handed in',
+              style: s.pendingBadge,
+            },
+            none: { text: 'Nothing yet', style: s.noneBadge },
+          };
+
+          return (
+            <div style={s.section}>
+              <div style={s.sectionHeader}>
+                <h2 style={s.sectionTitle}>
+                  ✅ Hand-ins — Round {round?.round_number}
+                  {round?.name ? ` — ${round.name}` : ''}
+                </h2>
+                <button
+                  onClick={() => { setHandInsRoundId(null); setHandIns([]); }}
+                  style={s.ghostBtn}
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              {pendingAnswers > 0 && (
+                <div style={s.pendingNotice}>
+                  <div>
+                    <strong>
+                      {pending.length} {pending.length === 1 ? 'team has' : 'teams have'} not handed in
+                    </strong>
+                    <div style={{ color: colors.textMuted, fontSize: '13px', marginTop: '4px' }}>
+                      {isOpen
+                        ? 'The round is still open, so they may yet hand in themselves.'
+                        : `${pendingAnswers} ${pendingAnswers === 1 ? 'answer was' : 'answers were'} entered but never handed in. ${pendingAnswers === 1 ? 'It scores' : 'They score'} nothing until you accept ${pendingAnswers === 1 ? 'it' : 'them'}.`}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => acceptDrafts(handInsRoundId, pending.length)}
+                    style={{ ...s.saveBtn, flex: '0 0 auto', padding: '12px 20px' }}
+                  >
+                    Accept {pendingAnswers} {pendingAnswers === 1 ? 'answer' : 'answers'}
+                  </button>
+                </div>
+              )}
+
+              <div style={s.tableContainer}>
+                {handIns.length === 0 ? (
+                  <p style={s.emptyText}>No teams in this quiz yet.</p>
+                ) : (
+                  <table style={s.table}>
+                    <thead>
+                      <tr style={s.tableHead}>
+                        <th style={s.th}>Team</th>
+                        <th style={s.th}>State</th>
+                        <th style={s.th}>Answered</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {handIns.map((row) => (
+                        <tr key={row.team_id} style={s.tr}>
+                          <td style={{ ...s.td, fontWeight: '600' }}>{row.team_name}</td>
+                          <td style={s.td}>
+                            <span style={label[row.status].style}>{label[row.status].text}</span>
+                          </td>
+                          <td style={{ ...s.td, color: colors.textMuted }}>
+                            {row.answered} / {row.question_count}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Answer Grading Section */}
         {gradingRoundId && (
           <div style={s.section}>
@@ -1141,14 +1517,27 @@ function OrganizerDashboard() {
                           borderLeftColor: a.is_correct === 1 ? colors.success
                             : a.is_correct === 0 ? colors.error : colors.warning,
                         }}>
-                          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1 }}>
+                          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1, flexWrap: 'wrap' }}>
                             <span style={{ fontWeight: '700', minWidth: '100px' }}>{a.team_name}</span>
                             <span style={{ color: colors.textMuted }}>
                               {formatSelectedAnswer(a)}
                             </span>
+                            {/* How this answer got here. A plain submission needs
+                                no label; the other two do, because they score
+                                differently or not at all. */}
+                            {a.answer_status === 'draft' && (
+                              <span style={s.pendingBadge} title="Entered but never handed in. Scores nothing until accepted.">
+                                not counted
+                              </span>
+                            )}
+                            {a.answer_status === 'accepted' && (
+                              <span style={commonStyles.badgePurple} title="Was never handed in; you accepted it after the round closed.">
+                                accepted
+                              </span>
+                            )}
                             {a.question_type !== 'open' && (
                               <span style={{ color: colors.textDim, fontSize: '12px' }}>
-                                Score: {formatScore(a.score)}
+                                Score: {a.answer_status === 'draft' ? '—' : formatScore(a.score)}
                               </span>
                             )}
                           </div>
@@ -1399,12 +1788,44 @@ const s = {
   },
   roundWrap: { display: 'flex', flexDirection: 'column' },
   liveCard: {
-    borderColor: colors.success,
+    border: `1px solid ${colors.success}`,  // shorthand, see QuestionDisplay optionSelected
     boxShadow: `0 0 0 1px ${colors.success}`,
   },
   liveBtn: {
     outline: `2px solid ${colors.success}`,
     outlineOffset: '2px',
+  },
+  teamActionBtn: {
+    padding: '6px 10px', fontSize: '12px', fontWeight: '600',
+    backgroundColor: colors.bgInput, color: colors.textMuted,
+    border: `1px solid ${colors.border}`, borderRadius: '6px', cursor: 'pointer',
+  },
+  teamRemoveBtn: {
+    padding: '6px 10px', fontSize: '12px', backgroundColor: colors.errorMuted,
+    color: colors.error, border: `1px solid ${colors.error}`,
+    borderRadius: '6px', cursor: 'pointer', flexShrink: 0,
+  },
+  screenFieldLabel: {
+    color: colors.textMuted, fontSize: '12px', fontWeight: '700',
+    textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '4px',
+  },
+  linkRow: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
+  pendingBadge: {
+    backgroundColor: colors.warningMuted, color: colors.warning,
+    padding: '4px 12px', borderRadius: '6px', fontSize: '12px',
+    fontWeight: '700', letterSpacing: '0.5px',
+  },
+  noneBadge: {
+    backgroundColor: colors.bgInput, color: colors.textDim,
+    padding: '4px 12px', borderRadius: '6px', fontSize: '12px',
+    fontWeight: '700', letterSpacing: '0.5px',
+  },
+  pendingNotice: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    gap: '16px', flexWrap: 'wrap', marginBottom: '16px',
+    padding: '16px 20px', borderRadius: '12px',
+    backgroundColor: colors.warningMuted,
+    border: `1px solid ${colors.warning}`,
   },
   screenPreview: {
     color: colors.textMuted, fontSize: '13px',
@@ -1449,8 +1870,8 @@ const s = {
     backgroundColor: 'transparent', color: colors.text,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
-  gradeBtnCorrect: { backgroundColor: colors.success, borderColor: colors.success },
-  gradeBtnWrong: { backgroundColor: colors.error, borderColor: colors.error },
+  gradeBtnCorrect: { backgroundColor: colors.success, border: `1px solid ${colors.success}` },
+  gradeBtnWrong: { backgroundColor: colors.error, border: `1px solid ${colors.error}` },
 
   // Leaderboard
   tableContainer: {

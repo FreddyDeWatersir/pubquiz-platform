@@ -318,6 +318,316 @@ check('an unauthorised socket cannot drive the quiz', async (ctx) => {
 });
 
 // ──────────────────────────────────────────────────────────
+// DRAFTS — unsubmitted answers survive a manual close
+// ──────────────────────────────────────────────────────────
+// A fresh quiz so these checks don't depend on the state left above.
+
+/** socket.emit with an acknowledgement, as a promise with a timeout. */
+function emitAck(socket, event, payload, ms = 4000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`No ack for "${event}"`)), ms);
+    socket.emit(event, payload, (reply) => {
+      clearTimeout(timer);
+      resolve(reply);
+    });
+  });
+}
+
+async function joinTeam(quizId, name) {
+  const reg = await api('POST', '/api/teams/register', { teamName: name, quizId }, false);
+  assert.strictEqual(reg.status, 201, JSON.stringify(reg.body));
+  const socket = ioClient(BASE, { transports: ['websocket'], forceNew: true });
+  await waitFor(socket, 'connect');
+  const joined = waitFor(socket, 'team:joined');
+  socket.emit('team:join', { sessionToken: reg.body.sessionToken });
+  await joined;
+  return { socket, id: reg.body.teamId, token: reg.body.sessionToken };
+}
+
+const leaderboardOf = async (quizId) =>
+  (await api('GET', `/api/organizer/quiz/${quizId}/leaderboard`)).body;
+const handInsOf = async (quizId, roundId) =>
+  (await api('GET', `/api/organizer/quiz/${quizId}/round/${roundId}/hand-ins`)).body;
+const scoreOf = (board, teamId) => board.find((t) => t.id === teamId).score;
+const statusOf = (handIns, teamId) => handIns.find((t) => t.team_id === teamId).status;
+
+check('drafts: setup a second quiz with two rounds and three teams', async (ctx) => {
+  const quiz = await api('POST', '/api/organizer/quizzes', { name: 'Drafts', access_code: 'DRAFTS' });
+  ctx.d = { quizId: quiz.body.quiz.id };
+  const { d } = ctx;
+
+  for (const n of [1, 2]) {
+    const round = await api('POST', `/api/organizer/quiz/${d.quizId}/rounds`, {});
+    d[`round${n}`] = round.body.round.id;
+  }
+  const q = async (roundId, opts, correct, extra = {}) =>
+    (await api('POST', '/api/admin/questions', {
+      round_id: roundId, question_text: 'q', options: opts, correct_answers: correct, ...extra,
+    })).body.questionId;
+  d.q1 = await q(d.round1, ['A1', 'B1', 'C1'], ['B']);
+  d.q2 = await q(d.round1, ['A2', 'B2'], ['A']);
+  d.qOpen = (await api('POST', '/api/admin/questions', {
+    round_id: d.round1, question_type: 'open', question_text: 'Capital?', correct_answer: 'Paris',
+  })).body.questionId;
+  d.qRound2 = await q(d.round2, ['X', 'Y'], ['A']);
+
+  d.organizer = ioClient(BASE, { transports: ['websocket'], forceNew: true });
+  await waitFor(d.organizer, 'connect');
+  d.organizer.emit('organizer:join', { quizId: d.quizId, token: TOKEN });
+  await waitFor(d.organizer, 'organizer:joined');
+
+  d.submitter = await joinTeam(d.quizId, 'Submitter');
+  d.dawdler = await joinTeam(d.quizId, 'Dawdler');
+  d.idle = await joinTeam(d.quizId, 'Idle');
+
+  const started = waitFor(d.dawdler.socket, 'round:started');
+  d.organizer.emit('organizer:activateRound', { roundId: d.round1 });
+  const payload = await started;
+  assert.strictEqual(payload.roundId, d.round1, 'round:started carries the round id');
+  assert.deepStrictEqual(payload.submittedTeamIds, [], 'nobody has handed in yet');
+});
+
+check('drafts: a tap is saved, but is NOT on the leaderboard', async (ctx) => {
+  const { d } = ctx;
+  const ack = await emitAck(d.dawdler.socket, 'team:draft', { questionId: d.q1, selectedAnswer: 'B' });
+  assert.deepStrictEqual(ack, { ok: true });
+
+  const row = await dbHelpers.get(
+    'SELECT * FROM answers WHERE team_id = ? AND question_id = ?', [d.dawdler.id, d.q1]
+  );
+  assert.strictEqual(row.answer_status, 'draft');
+  assert.strictEqual(row.score, 1, 'scored at write time...');
+  assert.strictEqual(scoreOf(await leaderboardOf(d.quizId), d.dawdler.id), 0, '...but hidden from standings');
+  // While the round is open 'drafting' reads as "still answering"; after it
+  // closes the same state reads as "never handed in".
+  assert.strictEqual(statusOf(await handInsOf(d.quizId, d.round1), d.dawdler.id), 'drafting');
+});
+
+check('drafts: rapid A-then-B taps store B (no interleaving)', async (ctx) => {
+  const { d } = ctx;
+  // Fire without awaiting, exactly like a fast double tap.
+  const first = emitAck(d.dawdler.socket, 'team:draft', { questionId: d.q2, selectedAnswer: 'B' });
+  const second = emitAck(d.dawdler.socket, 'team:draft', { questionId: d.q2, selectedAnswer: 'A' });
+  await Promise.all([first, second]);
+  const row = await dbHelpers.get(
+    'SELECT selected_answer FROM answers WHERE team_id = ? AND question_id = ?', [d.dawdler.id, d.q2]
+  );
+  assert.strictEqual(row.selected_answer, 'A', 'the last tap wins');
+});
+
+check('drafts: clearing an answer deletes it; junk labels are ignored', async (ctx) => {
+  const { d } = ctx;
+  await emitAck(d.dawdler.socket, 'team:draft', { questionId: d.qOpen, answerText: 'Par' });
+  await emitAck(d.dawdler.socket, 'team:draft', { questionId: d.qOpen, answerText: '   ' });
+  const cleared = await dbHelpers.get(
+    'SELECT id FROM answers WHERE team_id = ? AND question_id = ?', [d.dawdler.id, d.qOpen]
+  );
+  assert.strictEqual(cleared, undefined, 'a blanked answer is removed, not stored empty');
+
+  // "Z" is not an option on this question: treated as no answer at all.
+  await emitAck(d.idle.socket, 'team:draft', { questionId: d.q1, selectedAnswer: 'Z' });
+  const junk = await dbHelpers.get(
+    'SELECT id FROM answers WHERE team_id = ? AND question_id = ?', [d.idle.id, d.q1]
+  );
+  assert.strictEqual(junk, undefined);
+});
+
+check('drafts: refused outside the live round of your own quiz', async (ctx) => {
+  const { d } = ctx;
+  const notLive = await emitAck(d.dawdler.socket, 'team:draft', { questionId: d.qRound2, selectedAnswer: 'A' });
+  assert.strictEqual(notLive.error, 'round_not_open', 'round 2 is not active');
+
+  // ctx.roundId belongs to the first quiz: another quiz's question.
+  const otherQuiz = await dbHelpers.get('SELECT id FROM questions WHERE round_id = ? LIMIT 1', [ctx.roundId]);
+  const foreign = await emitAck(d.dawdler.socket, 'team:draft', { questionId: otherQuiz.id, selectedAnswer: 'A' });
+  assert.strictEqual(foreign.error, 'round_not_open');
+});
+
+check('drafts: submit is final — a later stray draft cannot demote it', async (ctx) => {
+  const { d } = ctx;
+  const ack = await emitAck(d.submitter.socket, 'team:submit', {
+    answers: [
+      { questionId: d.q1, selectedAnswer: 'B' },
+      { questionId: d.q2, selectedAnswer: 'A' },
+      { questionId: d.qOpen, answerText: 'Paris' },
+      { questionId: d.qRound2, selectedAnswer: 'A' }, // not in the live round: ignored
+    ],
+  });
+  assert.strictEqual(ack.success, true);
+
+  const stray = await emitAck(d.submitter.socket, 'team:draft', { questionId: d.q1, selectedAnswer: 'C' });
+  assert.strictEqual(stray.error, 'already_submitted');
+
+  const sneaked = await dbHelpers.get(
+    'SELECT id FROM answers WHERE team_id = ? AND question_id = ?', [d.submitter.id, d.qRound2]
+  );
+  assert.strictEqual(sneaked, undefined, 'a submit cannot write into a round that is not live');
+
+  assert.strictEqual(statusOf(await handInsOf(d.quizId, d.round1), d.submitter.id), 'submitted');
+  assert.strictEqual(scoreOf(await leaderboardOf(d.quizId), d.submitter.id), 2, 'two MC right, open ungraded');
+
+  const mine = await emitAck(d.submitter.socket, 'team:getRoundAnswers', { roundId: d.round1 });
+  assert.strictEqual(mine.submitted, true);
+  assert.strictEqual(mine.answers[d.qOpen].answerText, 'Paris', 'the review gets back what was typed');
+  assert.strictEqual(mine.answers[d.q1].selectedAnswer, 'B');
+});
+
+check('drafts: closing a round does NOT count unsubmitted answers', async (ctx) => {
+  const { d } = ctx;
+  const closedForOrganizer = waitFor(d.organizer, 'organizer:roundClosed');
+  d.organizer.emit('organizer:closeRound', { roundId: d.round1 });
+  const closed = await closedForOrganizer;
+  assert.strictEqual(closed.pendingDrafts, 2, 'the dawdler had two answers awaiting a decision');
+
+  const row = await dbHelpers.get(
+    'SELECT answer_status FROM answers WHERE team_id = ? AND question_id = ?', [d.dawdler.id, d.q1]
+  );
+  assert.strictEqual(row.answer_status, 'draft', 'still a draft after the close');
+
+  assert.strictEqual(scoreOf(await leaderboardOf(d.quizId), d.dawdler.id), 0,
+    'an unsubmitted answer scores nothing until the organizer accepts it');
+
+  const handIns = await handInsOf(d.quizId, d.round1);
+  assert.strictEqual(statusOf(handIns, d.dawdler.id), 'drafting');
+  assert.strictEqual(handIns.find((h) => h.team_id === d.dawdler.id).draft_count, 2,
+    'the dashboard can say how much is at stake');
+  assert.strictEqual(statusOf(handIns, d.idle.id), 'none', 'the team that did nothing is visible');
+  assert.strictEqual(statusOf(handIns, d.submitter.id), 'submitted');
+
+  const late = await emitAck(d.dawdler.socket, 'team:draft', { questionId: d.q1, selectedAnswer: 'C' });
+  assert.strictEqual(late.error, 'round_not_open', 'no drafts after the close');
+
+  // The team still gets to see what it had entered.
+  const mine = await emitAck(d.dawdler.socket, 'team:getRoundAnswers', { roundId: d.round1 });
+  assert.strictEqual(mine.submitted, false);
+  assert.strictEqual(mine.answers[d.q1].selectedAnswer, 'B', 'the review shows what they had');
+});
+
+check('drafts: the organizer accepts them explicitly, and only then they score', async (ctx) => {
+  const { d } = ctx;
+  const accepted = await api('POST', `/api/organizer/rounds/${d.round1}/accept-drafts`);
+  assert.strictEqual(accepted.status, 200, JSON.stringify(accepted.body));
+  assert.strictEqual(accepted.body.accepted, 2);
+
+  const row = await dbHelpers.get(
+    'SELECT answer_status FROM answers WHERE team_id = ? AND question_id = ?', [d.dawdler.id, d.q1]
+  );
+  assert.strictEqual(row.answer_status, 'accepted');
+
+  // q1=B right (1) + q2=A right (1)
+  assert.strictEqual(scoreOf(await leaderboardOf(d.quizId), d.dawdler.id), 2,
+    'accepted answers score exactly as a submission would');
+  assert.strictEqual(statusOf(await handInsOf(d.quizId, d.round1), d.dawdler.id), 'accepted',
+    'still tellable apart from a real hand-in');
+
+  // Accepting twice is harmless: there is nothing left to promote.
+  const again = await api('POST', `/api/organizer/rounds/${d.round1}/accept-drafts`);
+  assert.strictEqual(again.body.accepted, 0);
+});
+
+check('drafts: reopening lists who handed in; the next round does not auto-count', async (ctx) => {
+  const { d } = ctx;
+  const reopened = waitFor(d.dawdler.socket, 'round:started');
+  d.organizer.emit('organizer:reopenRound', { roundId: d.round1 });
+  const payload = await reopened;
+  assert.deepStrictEqual(payload.submittedTeamIds, [d.submitter.id],
+    'the submitter sees a review, the others get their questions back');
+
+  // The idle team finally answers one question, then the organizer moves on
+  // to round 2 WITHOUT closing round 1.
+  await emitAck(d.idle.socket, 'team:draft', { questionId: d.q1, selectedAnswer: 'B' });
+  const activated = waitFor(d.organizer, 'organizer:roundActivated');
+  d.organizer.emit('organizer:activateRound', { roundId: d.round2 });
+  await activated;
+
+  assert.strictEqual(scoreOf(await leaderboardOf(d.quizId), d.idle.id), 0,
+    'moving to the next round does not quietly count the last one');
+  assert.strictEqual(statusOf(await handInsOf(d.quizId, d.round1), d.idle.id), 'drafting',
+    'it stays on the hand-ins list waiting on a decision');
+});
+
+check('screens: links are validated, a countdown is sent as time remaining', async (ctx) => {
+  const { d } = ctx;
+  // A live round outranks a screen (a reloading phone gets its questions back),
+  // so close round 2 first: this is the between-rounds break.
+  const closed = waitFor(d.organizer, 'organizer:roundClosed');
+  d.organizer.emit('organizer:closeRound', { roundId: d.round2 });
+  await closed;
+
+  const evil = await api('POST', `/api/organizer/quiz/${d.quizId}/screens`, {
+    title: 'Bad', links: [{ label: 'x', url: 'javascript:alert(1)' }],
+  });
+  assert.strictEqual(evil.status, 400, 'javascript: URLs are rejected');
+
+  const made = await api('POST', `/api/organizer/quiz/${d.quizId}/screens`, {
+    title: 'Pauze',
+    body: 'Even bijtanken',
+    countdown_seconds: 600,
+    links: [
+      { label: 'Instagram', url: 'instagram.com/quizmastersofmelody' },
+      { label: '', url: '' }, // the empty row the editor always shows
+    ],
+  });
+  assert.strictEqual(made.status, 201, JSON.stringify(made.body));
+  assert.strictEqual(made.body.screen.links.length, 1, 'blank rows are dropped');
+  assert.strictEqual(made.body.screen.links[0].url, 'https://instagram.com/quizmastersofmelody',
+    'a bare domain becomes https');
+
+  const shown = waitFor(d.dawdler.socket, 'screen:show');
+  d.organizer.emit('organizer:showScreen', { quizId: d.quizId, screenId: made.body.screen.id });
+  const screen = await shown;
+  assert.ok(screen.remainingMs > 590000 && screen.remainingMs <= 600000, `remaining ${screen.remainingMs}`);
+  assert.strictEqual(screen.links[0].label, 'Instagram');
+
+  // A phone that reloads mid-break sees the countdown already running.
+  await new Promise((r) => setTimeout(r, 1100));
+  const again = ioClient(BASE, { transports: ['websocket'], forceNew: true });
+  await waitFor(again, 'connect');
+  const replay = waitFor(again, 'screen:show');
+  again.emit('team:join', { sessionToken: d.dawdler.token });
+  const replayed = await replay;
+  assert.ok(replayed.remainingMs < screen.remainingMs - 1000, 'the countdown kept running');
+  again.disconnect();
+});
+
+check('teams: an organizer can fix a typo and delete a ghost team', async (ctx) => {
+  const { d } = ctx;
+
+  const renamed = await api('PUT', `/api/organizer/teams/${d.idle.id}`, { team_name: '  De Bierbuiken  ' });
+  assert.strictEqual(renamed.status, 200, JSON.stringify(renamed.body));
+  const row = await dbHelpers.get('SELECT team_name FROM teams WHERE id = ?', [d.idle.id]);
+  assert.strictEqual(row.team_name, 'De Bierbuiken', 'trimmed on the way in');
+
+  const clash = await api('PUT', `/api/organizer/teams/${d.dawdler.id}`, { team_name: 'De Bierbuiken' });
+  assert.strictEqual(clash.status, 409, 'two teams in one quiz cannot share a name');
+
+  const blank = await api('PUT', `/api/organizer/teams/${d.idle.id}`, { team_name: '   ' });
+  assert.strictEqual(blank.status, 400);
+
+  // A ghost team: registered, never played. Deleting it takes its answers too.
+  const ghost = await api('POST', '/api/teams/register', { teamName: 'Ghost', quizId: d.quizId }, false);
+  assert.strictEqual(ghost.status, 201);
+  const removed = await api('DELETE', `/api/organizer/teams/${ghost.body.teamId}`);
+  assert.strictEqual(removed.status, 200);
+  assert.strictEqual(
+    await dbHelpers.get('SELECT id FROM teams WHERE id = ?', [ghost.body.teamId]),
+    undefined
+  );
+  assert.strictEqual(
+    (await leaderboardOf(d.quizId)).find((t) => t.team_name === 'Ghost'),
+    undefined,
+    'and it leaves the leaderboard'
+  );
+
+  assert.strictEqual((await api('DELETE', '/api/organizer/teams/999999')).status, 404);
+});
+
+check('drafts: cleanup sockets', async (ctx) => {
+  const { d } = ctx;
+  [d.organizer, d.submitter.socket, d.dawdler.socket, d.idle.socket].forEach((s) => s.disconnect());
+});
+
+// ──────────────────────────────────────────────────────────
 
 (async () => {
   await dbHelpers.ensureInitialized();

@@ -80,11 +80,29 @@ if (USE_MYSQL) {
           quiz_id INT NOT NULL,
           title VARCHAR(255) NOT NULL,
           body TEXT,
+          links_json TEXT,
+          countdown_seconds INT,
           sort_order INT DEFAULT 0,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (quiz_id) REFERENCES quizzes(id)
         )
       `);
+
+      // Screens shipped in September without these, so production tables
+      // need them added; a fresh database already has them from the CREATE.
+      const screenMigrations = [
+        ['links_json', `ALTER TABLE quiz_screens ADD COLUMN links_json TEXT`],
+        ['countdown_seconds', `ALTER TABLE quiz_screens ADD COLUMN countdown_seconds INT`],
+      ];
+      for (const [name, sql] of screenMigrations) {
+        try {
+          await conn.query(sql);
+        } catch (err) {
+          if (err.code !== 'ER_DUP_FIELDNAME') {
+            console.error(`MySQL migration error (${name}):`, err.message);
+          }
+        }
+      }
 
       await conn.query(`
         CREATE TABLE IF NOT EXISTS rounds (
@@ -172,6 +190,7 @@ if (USE_MYSQL) {
           answer_text TEXT,
           is_correct TINYINT(1) DEFAULT NULL,
           score FLOAT DEFAULT 0,
+          answer_status VARCHAR(12) DEFAULT 'submitted',
           submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (team_id) REFERENCES teams(id),
           FOREIGN KEY (question_id) REFERENCES questions(id),
@@ -182,6 +201,10 @@ if (USE_MYSQL) {
       const answerMigrations = [
         ['selected_answers_json', `ALTER TABLE answers ADD COLUMN selected_answers_json TEXT`],
         ['score', `ALTER TABLE answers ADD COLUMN score FLOAT DEFAULT 0`],
+        // 'draft' | 'submitted' | 'salvaged' — see utils/answers.js. Every row
+        // that existed before this column was a real submission, which is
+        // exactly what the default gives them.
+        ['answer_status', `ALTER TABLE answers ADD COLUMN answer_status VARCHAR(12) DEFAULT 'submitted'`],
       ];
       for (const [name, sql] of answerMigrations) {
         try {
@@ -283,11 +306,24 @@ if (USE_MYSQL) {
           quiz_id INTEGER NOT NULL,
           title TEXT NOT NULL,
           body TEXT,
+          links_json TEXT,
+          countdown_seconds INTEGER,
           sort_order INTEGER DEFAULT 0,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (quiz_id) REFERENCES quizzes(id)
         )
       `);
+
+      db.run(`ALTER TABLE quiz_screens ADD COLUMN links_json TEXT`, (err) => {
+        if (err && !err.message.includes('duplicate column')) {
+          console.error('Migration error (links_json):', err);
+        }
+      });
+      db.run(`ALTER TABLE quiz_screens ADD COLUMN countdown_seconds INTEGER`, (err) => {
+        if (err && !err.message.includes('duplicate column')) {
+          console.error('Migration error (countdown_seconds):', err);
+        }
+      });
 
       db.run(`
         CREATE TABLE IF NOT EXISTS rounds (
@@ -370,6 +406,7 @@ if (USE_MYSQL) {
           answer_text TEXT,
           is_correct INTEGER DEFAULT NULL,
           score REAL DEFAULT 0,
+          answer_status TEXT DEFAULT 'submitted',
           submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (team_id) REFERENCES teams(id),
           FOREIGN KEY (question_id) REFERENCES questions(id),
@@ -379,10 +416,6 @@ if (USE_MYSQL) {
         if (err) {
           console.error('Error creating tables:', err);
           reject(err);
-        } else {
-          console.log('Database schema initialized');
-          isInitialized = true;
-          resolve();
         }
       });
 
@@ -395,11 +428,24 @@ if (USE_MYSQL) {
       };
       migrateAnswerColumn('selected_answers_json', `ALTER TABLE answers ADD COLUMN selected_answers_json TEXT`);
       migrateAnswerColumn('score', `ALTER TABLE answers ADD COLUMN score REAL DEFAULT 0`);
+      migrateAnswerColumn('answer_status', `ALTER TABLE answers ADD COLUMN answer_status TEXT DEFAULT 'submitted'`);
       db.run(`
         UPDATE answers
         SET score = 1
         WHERE is_correct = 1 AND (score IS NULL OR score = 0)
       `);
+
+      // Signal "ready" only after EVERY statement above has run. Inside
+      // db.serialize they execute in order, so this no-op is last. Resolving
+      // earlier (it used to resolve as soon as the answers table existed) left
+      // a window where a query could arrive before the answer migrations
+      // finished and hit a missing column.
+      db.run('SELECT 1', (err) => {
+        if (err) return reject(err);
+        console.log('Database schema initialized');
+        isInitialized = true;
+        resolve();
+      });
     });
   }
 

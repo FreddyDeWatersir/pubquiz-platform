@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { colors, commonStyles } from '../theme';
 import { translator } from '../i18n';
 
 const IMAGE_MAX_HEIGHT = { small: '200px', medium: '350px', large: '500px' };
 
-function getQuestionOptions(question) {
+export function getQuestionOptions(question) {
   if (question.options && question.options.length > 0) {
     return question.options.map((o) =>
       typeof o === 'string' ? { label: '', text: o } : o
@@ -19,14 +19,53 @@ function getQuestionOptions(question) {
     .filter(Boolean);
 }
 
-function QuestionDisplay({ questions, onSubmit, teamName, connected = true, round = null, language = 'en' }) {
+function QuestionDisplay({
+  questions,
+  onSubmit,
+  teamName,
+  connected = true,
+  round = null,
+  language = 'en',
+  savedAnswers = null,
+  onDraftChange = () => {},
+}) {
   const [answers, setAnswers] = useState({});
   const [textAnswers, setTextAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const tt = translator(language);
 
+  // Questions this phone has changed since the round appeared. The saved
+  // answers from the server arrive a moment after the questions do; if a team
+  // already tapped something in that gap, their tap wins over the older copy.
+  const touchedRef = useRef(new Set());
+
+  // Restore what the server holds for this team: after a refresh, after the
+  // phone was asleep, or when a closed round is reopened. Without this a
+  // refresh mid-round used to wipe every answer that hadn't been submitted.
+  useEffect(() => {
+    if (!savedAnswers) return;
+    const restoredChoices = {};
+    const restoredTexts = {};
+    Object.entries(savedAnswers).forEach(([questionId, saved]) => {
+      if (touchedRef.current.has(String(questionId))) return;
+      if (saved.answerText != null) restoredTexts[questionId] = saved.answerText;
+      else if (Array.isArray(saved.selectedAnswers)) restoredChoices[questionId] = saved.selectedAnswers;
+      else if (saved.selectedAnswer) restoredChoices[questionId] = saved.selectedAnswer;
+    });
+    setAnswers((prev) => ({ ...restoredChoices, ...prev }));
+    setTextAnswers((prev) => ({ ...restoredTexts, ...prev }));
+  }, [savedAnswers]);
+
+  // Every change goes to the server straight away as a draft, so a round the
+  // quizmaster closes before this team presses Submit still keeps its answers.
+  const report = (questionId, value) => {
+    touchedRef.current.add(String(questionId));
+    onDraftChange(questionId, value);
+  };
+
   const handleAnswerChange = (questionId, answer) => {
     setAnswers({ ...answers, [questionId]: answer });
+    report(questionId, { selectedAnswer: answer });
   };
 
   const handleMultiAnswerChange = (questionId, answer) => {
@@ -35,10 +74,12 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true, roun
       ? current.filter((item) => item !== answer)
       : [...current, answer];
     setAnswers({ ...answers, [questionId]: next });
+    report(questionId, { selectedAnswers: next });
   };
 
   const handleTextChange = (questionId, text) => {
     setTextAnswers({ ...textAnswers, [questionId]: text });
+    report(questionId, { answerText: text });
   };
 
   const handleSubmit = () => {
@@ -88,6 +129,7 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true, roun
   return (
     <div style={styles.container}>
       <div style={styles.header}>
+        <div style={styles.headerInner}>
         <div style={styles.headerTop}>
           <span style={styles.teamBadge}>⚡ {teamName}</span>
           <span style={styles.progress}>
@@ -108,6 +150,7 @@ function QuestionDisplay({ questions, onSubmit, teamName, connected = true, roun
             ...styles.progressFill,
             width: `${(answeredCount / questions.length) * 100}%`,
           }} />
+        </div>
         </div>
       </div>
 
@@ -217,9 +260,23 @@ const styles = {
     padding: '20px',
     fontFamily: "'Outfit', 'Segoe UI', sans-serif",
   },
+  // Sticky so the round name and the answered count stay in view while
+  // scrolling a long round. It spans the container's 20px padding (negative
+  // margins) so nothing scrolls past visibly at its edges, and has a solid
+  // background so cards slide *under* it rather than showing through.
   header: {
+    position: 'sticky',
+    top: 0,
+    zIndex: 10,
+    margin: '-20px -20px 24px',
+    padding: '16px 20px 14px',
+    backgroundColor: colors.bg,
+    borderBottom: `1px solid ${colors.border}`,
+    boxShadow: '0 8px 16px -12px rgba(0, 0, 0, 0.8)',
+  },
+  headerInner: {
     maxWidth: '800px',
-    margin: '0 auto 24px',
+    margin: '0 auto',
   },
   headerTop: {
     display: 'flex',
@@ -245,6 +302,8 @@ const styles = {
   },
   roundName: {
     color: colors.primary,
+    // The dash sits tight against the round number at this weight without it.
+    marginLeft: '4px',
   },
   progressBar: {
     width: '100%',
@@ -308,7 +367,11 @@ const styles = {
   },
   optionSelected: {
     backgroundColor: colors.primaryMuted,
-    borderColor: `1px solid ${colors.primary}`,
+    // Must be the `border` shorthand, the same key the base style uses.
+    // A `borderColor` overlay gets *removed* by React on deselect, and a
+    // removed longhand falls back to currentColor (white): that was the white
+    // outline left on every option a team had tapped before changing its mind.
+    border: `1px solid ${colors.primary}`,
   },
   // Without the letter badge the row loses its left inset, so add it back —
   // otherwise a lettered and a letterless question look misaligned.
