@@ -1,3 +1,17 @@
+// Load backend/.env BEFORE anything else: database.js and auth.js read their
+// settings the moment they are required, and auth.js exits if the admin
+// password is missing.
+//
+// On the server, PM2 already preloads this (`node -r dotenv/config`), so this
+// line changes nothing there: dotenv never overwrites a value that is already
+// set. It exists so a laptop can run the backend from a backend/.env too,
+// instead of typing the passwords into the terminal every time.
+//
+// LOCAL .env WARNING: leave MYSQL_HOST out of your laptop's .env. Without it
+// the backend uses the local SQLite file; with the production MySQL details
+// it would read and write the client's real quiz data.
+require('dotenv').config({ path: require('path').join(__dirname, '../.env'), quiet: true });
+
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -110,4 +124,4 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`✅ Server running on http://localhost:${PORT}`);
   console.log(`✅ WebSocket server ready`);
-});
+});
